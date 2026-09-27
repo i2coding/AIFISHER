@@ -12,6 +12,7 @@ import { createWorkflowRuntimeRouter } from './workflowRuntimeRouter.js';
 import { WorkflowRunStore } from './workflowRunStore.js';
 import { LocalComfyExecutor } from './localComfyExecutor.js';
 import { RunningHubWorkflowExecutor } from './runningHubWorkflowExecutor.js';
+import { readRunningHubAccessConfig } from './runningHubAccessConfig.js';
 import { RunningHubWebAppLibraryService } from './runningHubWebAppLibraryService.js';
 import { createRunningHubWebAppRouter } from './runningHubWebAppRouter.js';
 import { WorkflowTestRunService } from './workflowTestRunService.js';
@@ -91,7 +92,8 @@ export async function createExecutionWorkflowRuntime({ libraryDirectory, private
       runStore: workflowRunStore,
       coordinator: generationRuntime.coordinator,
       libraryDirectory: libraryDirectory,
-      credentialResolver: resolveRunningHubWorkflowCredential
+      credentialResolver: resolveRunningHubWorkflowCredential,
+      accessConfig: () => readRunningHubAccessConfig(privateDirectory)
   });
   const workflowTestRunService = new WorkflowTestRunService({
       definitionStore: workflowDefinitionStore,

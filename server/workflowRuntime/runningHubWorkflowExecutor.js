@@ -16,6 +16,10 @@ import { RUNNINGHUB_WEBAPP_OUTPUT_NODE_ID } from './runningHubWebApp.js';
 import { prepareRunningHubWebAppCompatibility } from './runningHubWebAppCompatibility.js';
 import { prepareRunningHubUploadAsset } from './runningHubUploadAdapter.js';
 import { validateWorkflowRunReceipt } from './workflowRunResult.js';
+import { RUNNINGHUB_ACCESS_DEFAULTS } from './runningHubAccessConfig.js';
+
+// 查询间隔的技术下限：抖动把间隔算成负值或过小时，等待仍不能为 0（防止忙轮询）。
+const MIN_POLL_DELAY_MS = 100;
 
 const MAX_ASSETS = 20;
 const MAX_TOTAL_UPLOAD_BYTES = MAX_ASSETS * RUNNINGHUB_WORKFLOW_LIMITS.maximumUploadBytes;
@@ -184,6 +188,8 @@ export class RunningHubWorkflowExecutor {
     credentialResolver,
     clientFactory = (options) => new RunningHubWorkflowClient(options),
     uploadAssetAdapter = prepareRunningHubUploadAsset,
+    // 全局访问设置读取器：返回 { totalTimeoutMs, baseIntervalMs, jitterMs, retryMaxAttempts }。
+    accessConfig = async () => ({ ...RUNNINGHUB_ACCESS_DEFAULTS }),
     wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     now = () => Date.now(),
     logger = console,
@@ -199,6 +205,7 @@ export class RunningHubWorkflowExecutor {
       credentialResolver,
       clientFactory,
       uploadAssetAdapter,
+      accessConfig,
       wait,
       now,
       logger,
@@ -262,8 +269,10 @@ export class RunningHubWorkflowExecutor {
   }
 
   async observe({ client, taskId, deployment, signal, runId }) {
-    const deadline = this.now() + deployment.timeoutMs;
-    let delay = 1_000;
+    const access = await this.accessConfig();
+    // 全局「总体超时时间」覆盖部署级 timeoutMs：云端调用 RunningHub 一律按此窗口轮询。
+    const deadline = this.now() + access.totalTimeoutMs;
+    let consecutiveFailures = 0;
     while (this.now() < deadline) {
       if (signal.aborted) return { state: 'cancel-requested' };
       try {
@@ -274,6 +283,7 @@ export class RunningHubWorkflowExecutor {
             })
           : await client.getTaskOutputs(taskId, { signal });
         if (observed.state !== 'pending') return observed;
+        consecutiveFailures = 0;
         this.coordinator.update(runId, {
           phase: 'running',
           providerStatus: String(observed.status || 'RUNNING').slice(0, 80),
@@ -282,6 +292,10 @@ export class RunningHubWorkflowExecutor {
         if (signal.aborted) return { state: 'cancel-requested' };
         if (!(error instanceof RunningHubWorkflowClientError)) throw error;
         if (!error.retryable) throw error;
+        // 网络类可重试错误按全局「重试次数」计数；连续失败超过上限即抛错，
+        // 不再无限续轮直到总体超时。
+        consecutiveFailures += 1;
+        if (consecutiveFailures > access.retryMaxAttempts) throw error;
         this.coordinator.update(runId, {
           phase: 'observing',
           code: error.code,
@@ -289,20 +303,23 @@ export class RunningHubWorkflowExecutor {
           remoteMayContinue: true,
         });
       }
+      // 查询间隔 = 基础间隔 ± 随机抖动（夹取到技术下限），不做递增。
+      const jitter = (Math.random() * 2 - 1) * access.jitterMs;
+      const delay = Math.max(MIN_POLL_DELAY_MS, Math.round(access.baseIntervalMs + jitter));
       await this.wait(delay);
-      delay = Math.min(5_000, Math.ceil(delay * 1.5));
     }
     return { state: 'unknown' };
   }
 
-  pauseObservation({ runId, taskId, deployment }) {
+  async pauseObservation({ runId, taskId, deployment }) {
+    const access = await this.accessConfig();
     return this.coordinator.pauseObservation(runId, {
       code: 'WORKFLOW_OBSERVATION_PAUSED',
       error: '已到当前查询上限，远端任务未取消。可以继续查询原任务。',
       retryable: false,
       remoteMayContinue: true,
       promptId: taskId,
-      observationWindowMs: deployment.timeoutMs,
+      observationWindowMs: access.totalTimeoutMs,
     });
   }
 
@@ -537,7 +554,7 @@ export class RunningHubWorkflowExecutor {
         return;
       }
       if (terminal.state === 'unknown') {
-        this.pauseObservation({ runId, taskId, deployment });
+        await this.pauseObservation({ runId, taskId, deployment });
         return;
       }
       remoteTerminalConfirmed = true;
@@ -628,7 +645,7 @@ export class RunningHubWorkflowExecutor {
         return;
       }
       if (terminal.state === 'unknown') {
-        this.pauseObservation({ runId, taskId, deployment });
+        await this.pauseObservation({ runId, taskId, deployment });
         return;
       }
       remoteTerminalConfirmed = true;

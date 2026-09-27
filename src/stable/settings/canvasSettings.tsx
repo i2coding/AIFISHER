@@ -13,6 +13,10 @@ import { installLocalProfile } from '../profile/localProfile';
 import { applyStoredAvatar } from '../profile/localProfile';
 import { mountLocalUpdateSettings } from '../update/localUpdateSettings';
 import { CanvasAppearanceSettings } from '../appearance/CanvasAppearanceSettings';
+import {
+  mountRunningHubAccessSettings,
+  createRunningHubAccessSettingsClient,
+} from './runningHubAccessSettings';
 
 type Runtime = Pick<
   typeof ReactTypes,
@@ -37,6 +41,7 @@ const sections = [
   ['appearance', '画布外观'],
   ['local-service', '开源服务'],
   ['models', '闭源服务'],
+  ['runninghub', 'RunningHub 访问'],
   ['storage', '存储'],
   ['diagnostics', '关于 AIFISHER 画布'],
 ] as const;
@@ -93,6 +98,11 @@ export function CanvasSettings(
         pageDisposeRef.current = mountSourceSettings(host, createSourceSettingsClient());
       else if (section === 'storage')
         pageDisposeRef.current = mountMediaDownloadSettings(host, installMediaDownloadFileName());
+      else if (section === 'runninghub')
+        pageDisposeRef.current = mountRunningHubAccessSettings(
+          host,
+          createRunningHubAccessSettingsClient(),
+        );
       else if (section === 'local-service')
         pageDisposeRef.current = mountLocalRuntimeSettings(
           host,
@@ -142,7 +152,7 @@ export function CanvasSettings(
         ref={dialogRef}
         data-fisherai-settings="true"
         data-fisherai-settings-owned="true"
-        data-fisherai-settings-domains="appearance models storage local-service network diagnostics"
+        data-fisherai-settings-domains="appearance models storage local-service network diagnostics runninghub"
         role="dialog"
         aria-label="AIFISHER 画布设置"
         aria-modal="true"
