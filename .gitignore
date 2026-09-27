@@ -1,5 +1,5 @@
 node_modules/
-runtime/
+/runtime/
 bin/
 dist/
 .desktop-dev/
