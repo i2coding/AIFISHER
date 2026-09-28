@@ -144,3 +144,9 @@ html[data-af-integrated-titlebar] .af-canvas-header [data-fisherai-comfyui-log-t
   padding: 3px 8px !important;
   font-size: 11px !important;
 }
+
+/* Space-held pan mode: disable hit-testing on every canvas content layer so the
+   pointer always lands on #canvas-background, which routes into startPanning. */
+[data-canvas-pan-mode='true'] #canvas-viewport-content * {
+  pointer-events: none !important;
+}

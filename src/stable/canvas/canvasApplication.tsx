@@ -215,6 +215,9 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       isPanning,
       releasePointerCapture,
     } = useDrag(),
+    [spaceHeld, setSpaceHeld] = React.useState(false),
+    spaceHeldRef = React.useRef(false),
+    endPanningRef = React.useRef(endPanning),
     {
       isResizing,
       handleResizeStart,
@@ -315,6 +318,39 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       ),
     [dramaBridge, nodes, setNodes, setSelectedNodeIds, dramaDocumentEpoch],
   );
+
+  // Hold Space to pan the canvas (Figma-style): pointerdown on the background
+  // routes into startPanning, text editors keep their normal space behaviour.
+  React.useEffect(() => {
+    const isTextEditable = (target: EventTarget | null) =>
+      target instanceof Element &&
+      Boolean(target.closest('input, textarea, select, [contenteditable]'));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || event.isComposing || isTextEditable(event.target)) return;
+      event.preventDefault();
+      spaceHeldRef.current = true;
+      setSpaceHeld(true);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      spaceHeldRef.current = false;
+      setSpaceHeld(false);
+      endPanningRef.current();
+    };
+    const onBlur = () => {
+      spaceHeldRef.current = false;
+      setSpaceHeld(false);
+      endPanningRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
 
   const deferFrame = useCanvasDeferredFrame(React, view === 'canvas', getWorkflowEpoch);
   const windowSize = useCanvasSurfaceSize(React, canvasRef, view, getWorkflowEpoch());
@@ -867,6 +903,12 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         }
       : null;
   const onCanvasPointerDown = (ke: ReactTypes.PointerEvent<HTMLDivElement>) => {
+      if (spaceHeldRef.current && ke.button === 0) {
+        startPanning(ke);
+        setSelectedConnection(null);
+        setContextMenu((st) => ({ ...st, isOpen: false }));
+        return;
+      }
       if ((isPendingConnection && cancelConnectionDrag(), ke.button === 1)) {
         startPanning(ke);
         setSelectedConnection(null);
@@ -1416,6 +1458,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         alignmentGuides: isDragging ? alignCanvasDrag(nodes, selectedNodeIds,
           { getWidth: getNodeWidth, getHeight: getNodeHeight }, { x: 0, y: 0 }, viewport.zoom, 0.01).guides : [],
         isPanning,
+        panModeHeld: spaceHeld,
         isDragging,
         isResizing,
         isDraggingConnection,

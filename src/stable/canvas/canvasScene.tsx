@@ -28,6 +28,7 @@ interface Props extends Record<string, unknown> {
   nodesByGroupId: Map<string, EdgeNode[]>;
   nodeDisplayData: Map<string, { inputUrl?: string; connectedImageNodes?: unknown[] }>;
   isPanning?: boolean;
+  panModeHeld?: boolean;
   isDragging?: boolean;
   alignmentGuides?: AlignmentGuide[];
   isResizing?: boolean;
@@ -249,6 +250,7 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
       key={documentEpoch}
       ref={canvasRef}
       id="canvas-background"
+      data-canvas-pan-mode={props.panModeHeld ? 'true' : undefined}
       className={`absolute inset-0 ${props.isPanning ? 'cursor-grabbing' : 'cursor-grab active:cursor-grabbing'}`}
       onPointerDown={props.onPointerDown}
       onPointerMove={props.onPointerMove}

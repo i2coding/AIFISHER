@@ -6,5 +6,8 @@
   "main": "src/main.mjs",
   "devDependencies": {
     "electron": "44.3.0"
+  },
+  "allowScripts": {
+    "electron@44.3.0": true
   }
 }
