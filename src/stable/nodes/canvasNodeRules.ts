@@ -169,7 +169,9 @@ export function nodeWidth(node: CanvasNode, parent?: CanvasNode): number {
   if (['Audio', 'Upload Audio'].includes(node.type)) return 365;
   if (node.type === 'ComfyUI')
     return node.kind === 'workflow'
-      ? (positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).width) ?? 520)
+      ? (positive(node.width)
+        ?? positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).width)
+        ?? 520)
       : node.comfyMode === 'minimax-h3-t2va'
         ? 900
         : legacyWorkflowWidth;
@@ -179,8 +181,8 @@ export function nodeHeight(node: CanvasNode, parent?: CanvasNode): number {
   // Dynamic workflow measurement must supersede a height saved before its parameters changed.
   if (node.type === 'ComfyUI' && node.kind === 'workflow')
     return (
-      positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).height) ??
       positive(node.height) ??
+      positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).height) ??
       520
     );
   const media = adaptiveMediaNodeSize(node);

@@ -287,7 +287,13 @@ export function installStableCanvasEditing(): StableCanvasEditingAdapter {
       const resized = nodes.map(node => {
         if (node.id !== options.id) return node;
         const minimum = node.type === 'Text' ? 252 : 200;
-        const width = Math.max(minimum, options.width), height = Math.max(minimum, options.height);
+        let width = Math.max(minimum, options.width);
+        let height = Math.max(minimum, options.height);
+        // ComfyUI 工作流节点：等比例缩放，以宽度变化为驱动
+        const ow = Number(node.width), oh = Number(node.height);
+        if (node.type === 'ComfyUI' && node.kind === 'workflow' && ow > 0 && oh > 0) {
+          height = Math.max(minimum, width * (oh / ow));
+        }
         return node.width === width && node.height === height ? node : { ...node, width, height };
       });
       if (resized.some((node, index) => node !== nodes[index])) {
