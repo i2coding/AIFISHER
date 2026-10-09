@@ -1,11 +1,8 @@
 import type * as React from 'react';
-import { IMAGE_MODELS } from '../../config/modelConfig';
 import type { CanvasNode } from '../nodes/canvasNodeOperations';
-import { generateImage } from '../generation/generationClient';
 import { interruptedGenerationPatch } from '../generation/generationRecovery';
 import { inspectImage } from './generationMediaMetadata';
 
-const model = IMAGE_MODELS.find((entry) => entry.provider === 'SeedVr2ImageProvider')!;
 interface Binding {
   projectId: string;
   getNodes(): CanvasNode[];
@@ -14,11 +11,40 @@ interface Binding {
   select(ids: string[]): void;
 }
 const runtime = {
-  generate: generateImage,
   inspect: inspectImage,
   id: (): string => crypto.randomUUID(),
   now: Date.now,
 };
+
+async function readUpscaleTargetSize(): Promise<number> {
+  try {
+    const res = await fetch('/api/preferences');
+    const body = await res.json();
+    const raw = body?.values?.['runninghub.upscale.targetSize'];
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) && parsed >= 256 && parsed <= 8192 ? parsed : 2048;
+  } catch {
+    return 2048;
+  }
+}
+
+async function callUpscaleWebApp(input: {
+  projectId: string;
+  sourceUrl: string;
+  targetSize: number;
+}): Promise<string> {
+  const res = await fetch('/api/upscale-webapp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body?.url) {
+    throw new Error(body?.error || '高清放大失败。');
+  }
+  return body.url as string;
+}
+
 export function createCanvasImageUpscale(binding: Binding, api = runtime) {
   let disposed = false;
   const activeSources = new Set<string>();
@@ -61,9 +87,9 @@ export function createCanvasImageUpscale(binding: Binding, api = runtime) {
         x: source.x + (Number(source.width) || 365) + 56,
         y: source.y,
         width: Number(source.width) || 365,
-        title: 'AI 高清放大 · SeedVR2',
-        prompt: 'SeedVR2 高清放大（云端应用默认设置）',
-        imageModel: model.name,
+        title: 'AI 高清放大 · 自定义应用',
+        prompt: '高清放大（自定义 WebApp）',
+        imageModel: 'SeedVR2 放大 · 自定义',
         imageMode: 'image-to-image',
         resolution: 'Auto',
         aspectRatio: source.resultAspectRatio || source.aspectRatio || '16:9',
@@ -87,22 +113,12 @@ export function createCanvasImageUpscale(binding: Binding, api = runtime) {
       binding.setNodes((nodes) => [...nodes, node]);
       binding.select([id]);
       try {
-        const result = await api.generate({
-          imageModel: model.name,
-          imageMode: 'image-to-image',
-          upscaleConfirmed: true,
-          imageBase64: [source.resultUrl],
-          generateCount: 1,
-          nodeId: id,
-          generationAttemptId: attempt,
+        const targetSize = await readUpscaleTargetSize();
+        const url = await callUpscaleWebApp({
           projectId: binding.projectId,
-          prompt: node.prompt,
-          resolution: 'Auto',
-          aspectRatio: node.aspectRatio,
-          // Unknown price is omitted, never presented as free or an invented estimate.
+          sourceUrl: String(source.resultUrl),
+          targetSize,
         });
-        const urls = Array.isArray(result) ? result : [result];
-        const url = urls[0];
         if (!url)
           throw Object.assign(new Error('正在核对原放大任务。'), {
             code: 'GENERATION_OBSERVATION_INTERRUPTED',
@@ -112,7 +128,7 @@ export function createCanvasImageUpscale(binding: Binding, api = runtime) {
         patch({
           ...metadata,
           resultUrl: url,
-          resultUrls: urls,
+          resultUrls: [url],
           status: 'success',
           generationAttemptId: undefined,
           generationStartTime: undefined,

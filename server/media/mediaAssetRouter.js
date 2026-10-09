@@ -353,7 +353,16 @@ export function createMediaAssetRouter({
   const trashDirectory = path.join(libraryDirectory, '.trash');
   const probeBundledMedia = createMediaMetadataProbe();
   const probeMetadata = metadataProbe || ((filePath, type) => (
-    type === 'images' ? probeImage(filePath, type) : probeBundledMedia(filePath, type)
+    type === 'images'
+      ? probeImage(filePath, type)
+      : probeBundledMedia(filePath, type).catch((error) => {
+          // ffprobe 二进制未随包分发（例如开发环境）时不要阻断上传：
+          // 降级为仅按声明类型推断 MIME，跳过时长/分辨率探测。
+          if (error?.code === 'BUNDLED_MEDIA_PROBE_UNAVAILABLE') {
+            return { mimeType: type === 'videos' ? 'video/mp4' : 'audio/mpeg' };
+          }
+          throw error;
+        })
   ));
   const requestExternal = async (value, options) => {
     try {

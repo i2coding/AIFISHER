@@ -333,6 +333,35 @@ export function CanvasContextMenu(
               },
               true,
             )}
+            {!connector && separator('upload')}
+            {!connector &&
+              item(
+                {
+                  label: '上传图片',
+                  icon: 'image',
+                  action: () => props.onSelectType('Upload Image'),
+                },
+                true,
+              )}
+            {!connector &&
+              item(
+                {
+                  label: '上传视频',
+                  icon: 'video',
+                  action: () => props.onSelectType('Upload Video'),
+                },
+                true,
+              )}
+            {!connector &&
+              item(
+                {
+                  label: '上传音频',
+                  icon: 'audio',
+                  action: () => props.onSelectType('Upload Audio'),
+                },
+                true,
+              )}
+            {separator('workflow')}
             {item(
               {
                 label: 'ComfyUI 工作流',

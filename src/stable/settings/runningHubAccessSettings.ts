@@ -12,6 +12,7 @@ export type RunningHubAccessSettings = {
   baseIntervalMs: number;
   jitterMs: number;
   retryMaxAttempts: number;
+  upscaleTargetSize: number;
 };
 
 export const RUNNINGHUB_ACCESS_DEFAULTS: RunningHubAccessSettings = {
@@ -19,6 +20,7 @@ export const RUNNINGHUB_ACCESS_DEFAULTS: RunningHubAccessSettings = {
   baseIntervalMs: 15_000,
   jitterMs: 5_000,
   retryMaxAttempts: 3,
+  upscaleTargetSize: 2048,
 };
 
 const ACCESS_KEYS = {
@@ -26,6 +28,7 @@ const ACCESS_KEYS = {
   baseIntervalMs: 'runninghub.access.baseIntervalMs',
   jitterMs: 'runninghub.access.jitterMs',
   retryMaxAttempts: 'runninghub.access.retryMaxAttempts',
+  upscaleTargetSize: 'runninghub.upscale.targetSize',
 } as const;
 
 function parseValue(values: Record<string, string>, key: string, fallback: number) {
@@ -73,6 +76,11 @@ export function createRunningHubAccessSettingsClient(
           ACCESS_KEYS.retryMaxAttempts,
           RUNNINGHUB_ACCESS_DEFAULTS.retryMaxAttempts,
         ),
+        upscaleTargetSize: parseValue(
+          values,
+          ACCESS_KEYS.upscaleTargetSize,
+          RUNNINGHUB_ACCESS_DEFAULTS.upscaleTargetSize,
+        ),
       };
     },
     async save(settings: RunningHubAccessSettings, options: SettingsRequestOptions = {}) {
@@ -90,6 +98,7 @@ export function createRunningHubAccessSettingsClient(
               [ACCESS_KEYS.baseIntervalMs]: String(settings.baseIntervalMs),
               [ACCESS_KEYS.jitterMs]: String(settings.jitterMs),
               [ACCESS_KEYS.retryMaxAttempts]: String(settings.retryMaxAttempts),
+              [ACCESS_KEYS.upscaleTargetSize]: String(settings.upscaleTargetSize),
             },
           }),
         },
@@ -166,6 +175,7 @@ export function mountRunningHubAccessSettings(
   const baseField = numberField('基础轮询间隔', '秒', '每次查询任务状态的时间基准。');
   const jitterField = numberField('随机抖动范围', '秒', '查询间隔 = 基础间隔 ± 抖动内随机值。');
   const retryField = numberField('查询失败重试次数', '次', '网络类错误连续重试上限，超出即停止。');
+  const upscaleField = numberField('高清放大目标边长', 'px', 'HD 按钮放大输出图的目标短边像素（256–8192）。');
 
   const actions = element('div', '', 'flex flex-wrap gap-2');
   const save = action('保存设置');
@@ -174,7 +184,7 @@ export function mountRunningHubAccessSettings(
 
   const message = element('p', '', 'min-h-5 text-xs text-[var(--af-text-secondary)]');
   message.setAttribute('aria-live', 'polite');
-  card.append(heading, totalField.row, baseField.row, jitterField.row, retryField.row, actions, message);
+  card.append(heading, totalField.row, baseField.row, jitterField.row, retryField.row, upscaleField.row, actions, message);
   panel.append(card);
 
   const busy = (active: boolean) => {
@@ -188,6 +198,7 @@ export function mountRunningHubAccessSettings(
     baseField.input.value = String(Math.round(settings.baseIntervalMs / 1_000));
     jitterField.input.value = String(Math.round(settings.jitterMs / 1_000));
     retryField.input.value = String(settings.retryMaxAttempts);
+    upscaleField.input.value = String(settings.upscaleTargetSize);
   };
 
   const showMessage = (text: string, warning = false) => {
@@ -224,8 +235,9 @@ export function mountRunningHubAccessSettings(
     const baseSeconds = Number(baseField.input.value);
     const jitterSeconds = Number(jitterField.input.value);
     const retry = Number(retryField.input.value);
+    const upscale = Number(upscaleField.input.value);
     if (
-      ![totalMinutes, baseSeconds, jitterSeconds, retry].every(Number.isFinite)
+      ![totalMinutes, baseSeconds, jitterSeconds, retry, upscale].every(Number.isFinite)
       || totalMinutes < 1 || baseSeconds < 1 || jitterSeconds < 0 || retry < 0
     ) {
       showMessage('请输入有效数字：超时 ≥ 1 分钟，间隔 ≥ 1 秒，抖动 ≥ 0，重试 ≥ 0。', true);
@@ -239,11 +251,16 @@ export function mountRunningHubAccessSettings(
       showMessage('总体超时时间不能超过 120 分钟（2 小时）。', true);
       return null;
     }
+    if (!Number.isInteger(upscale) || upscale < 256 || upscale > 8192) {
+      showMessage('高清放大目标边长需为 256–8192 之间的整数。', true);
+      return null;
+    }
     return {
       totalTimeoutMs: Math.round(totalMinutes * 60_000),
       baseIntervalMs: Math.round(baseSeconds * 1_000),
       jitterMs: Math.round(jitterSeconds * 1_000),
       retryMaxAttempts: Math.round(retry),
+      upscaleTargetSize: upscale,
     };
   };
 

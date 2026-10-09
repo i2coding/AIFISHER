@@ -88,6 +88,7 @@ import { RelayAccountStore } from './account/relayAccountStore.js';
 import { createDiagnosticsRouter } from './diagnostics/diagnosticsRouter.js';
 import { createThumbnailCache, ThumbnailCacheError } from './media/thumbnailCache.js';
 import { createMediaAssetRouter } from './media/mediaAssetRouter.js';
+import { createCanvasUpscaleWebAppRouter } from './media/canvasUpscaleWebAppRouter.js';
 import { createMediaEditingRouter } from './media/mediaEditingRouter.js';
 import { createMediaDownloadRouter } from './media/mediaDownloadRouter.js';
 import { createLegacyLibraryRouter } from './media/legacyLibraryRouter.js';
@@ -560,6 +561,10 @@ Object.defineProperty(app.locals, 'LIBRARY_MEDIA_DIR', { get: () => getWorkspace
 app.use('/api', createMediaAssetRouter({
     libraryDirectory: getWorkspacePaths().LIBRARY_DIR,
     workflowStore
+}));
+app.use('/api', createCanvasUpscaleWebAppRouter({
+    libraryDirectory: getWorkspacePaths().LIBRARY_DIR,
+    privateDirectory: getWorkspacePaths().PRIVATE_DIR,
 }));
 app.use('/api', createMediaEditingRouter({
     libraryDirectory: getWorkspacePaths().LIBRARY_DIR

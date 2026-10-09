@@ -92,7 +92,7 @@ export function CanvasMediaToolbar(React: Runtime, props: Props, components: Com
       event.currentTarget,
     );
   };
-  if (!selected || !showControls || isDragging || (!node.resultUrl && node.type !== 'Upload Video'))
+  if (!selected || !showControls || isDragging || (!node.resultUrl && !(imageTypes.has(node.type) || node.type.startsWith('Upload '))))
     return null;
   const action = (
     label: string,
@@ -231,9 +231,13 @@ export function CanvasMediaToolbar(React: Runtime, props: Props, components: Com
             <div className="w-px h-3 bg-[var(--af-selected)] mx-0.5" />
           </React.Fragment>
         )}
-        {node.type.startsWith('Upload ') &&
+        {imageTypes.has(node.type) &&
           fileInputRef &&
-          action('替换素材', components.replace, () => fileInputRef.current?.click())}
+          action(
+            node.resultUrl ? '替换素材' : '上传图片',
+            components.replace,
+            () => fileInputRef.current?.click(),
+          )}
         {(imageTypes.has(node.type) || videoTypes.has(node.type) || audioTypes.has(node.type)) &&
           node.resultUrl &&
           !node.uploadPending &&

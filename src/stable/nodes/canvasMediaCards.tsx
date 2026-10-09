@@ -134,7 +134,7 @@ function MediaCard(
             }
           : {})}
       />
-      {upload && (
+      {(upload || kind === 'Image') && (
         <input
           ref={fileInput}
           type="file"
