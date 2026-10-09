@@ -167,24 +167,25 @@ export function nodeWidth(node: CanvasNode, parent?: CanvasNode): number {
   if (stored) return stored;
   if (node.type === 'Text') return 252;
   if (['Audio', 'Upload Audio'].includes(node.type)) return 365;
-  if (node.type === 'ComfyUI')
-    return node.kind === 'workflow'
-      ? (positive(node.width)
-        ?? positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).width)
-        ?? 520)
-      : node.comfyMode === 'minimax-h3-t2va'
-        ? 900
-        : legacyWorkflowWidth;
+  if (node.type === 'ComfyUI') {
+    if (node.kind === 'workflow') {
+      const measured = positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).width);
+      return node.manualSize === true
+        ? (positive(node.width) ?? measured ?? 520)
+        : (measured ?? positive(node.width) ?? 520);
+    }
+    return node.comfyMode === 'minimax-h3-t2va' ? 900 : legacyWorkflowWidth;
+  }
   return 252 * Math.max(1, nodeAspectRatio(node, parent));
 }
 export function nodeHeight(node: CanvasNode, parent?: CanvasNode): number {
   // Dynamic workflow measurement must supersede a height saved before its parameters changed.
-  if (node.type === 'ComfyUI' && node.kind === 'workflow')
-    return (
-      positive(node.height) ??
-      positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).height) ??
-      520
-    );
+  if (node.type === 'ComfyUI' && node.kind === 'workflow') {
+    const measured = positive(window.__FISHERAI_WORKFLOW_NODES__?.getNodeSize(node).height);
+    return node.manualSize === true
+      ? (positive(node.height) ?? measured ?? 520)
+      : (measured ?? positive(node.height) ?? 520);
+  }
   const media = adaptiveMediaNodeSize(node);
   if (media) return media.height;
   const stored = positive(node.height);

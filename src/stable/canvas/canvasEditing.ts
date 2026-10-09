@@ -294,7 +294,7 @@ export function installStableCanvasEditing(): StableCanvasEditingAdapter {
         if (node.type === 'ComfyUI' && node.kind === 'workflow' && ow > 0 && oh > 0) {
           height = Math.max(minimum, width * (oh / ow));
         }
-        return node.width === width && node.height === height ? node : { ...node, width, height };
+        return node.width === width && node.height === height ? node : { ...node, width, height, manualSize: true };
       });
       if (resized.some((node, index) => node !== nodes[index])) {
         resizeCalls += 1;
