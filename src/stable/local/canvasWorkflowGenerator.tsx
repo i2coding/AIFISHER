@@ -910,9 +910,10 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
               id={'fisherai-workflow-settings-' + node.id}
               data-fisherai-workflow-parameters={'true'}
               style={{
-                flex: '1 0 auto',
+                flex: '1 1 auto',
                 minHeight: 0,
-                overflow: 'visible',
+                overflowY: 'auto',
+                overflowX: 'hidden',
                 padding: '16px',
                 background: cloud ? 'var(--af-info-bg)' : 'var(--af-surface)',
               }}
