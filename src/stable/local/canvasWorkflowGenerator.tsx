@@ -46,6 +46,7 @@ interface Props {
   isInvalidHover: boolean;
   onMouseEnter: unknown;
   onMouseLeave: unknown;
+  onResizeStart?: unknown;
   connectedImageNodes?: ConnectedNode[];
   projectId: string;
 }
@@ -62,6 +63,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
     isInvalidHover: isInvalidHover,
     onMouseEnter: onMouseEnter,
     onMouseLeave: onMouseLeave,
+    onResizeStart: onResizeStart,
     connectedImageNodes: connectedNodes = [],
     projectId: projectId,
   } = props;
@@ -763,6 +765,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
       isInvalidHover={isInvalidHover}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      onResizeStart={onResizeStart}
     >
       <div
         data-fisherai-workflow-node={'true'}
