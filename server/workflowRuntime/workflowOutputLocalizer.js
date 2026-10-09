@@ -353,8 +353,9 @@ export async function localizeWorkflowOutputs({
         });
       } catch (error) {
         if (error instanceof MediaArtifactError || error instanceof MediaProbeError) {
+          const detail = error?.message ? `（${error.message}）` : '';
           throw new WorkflowOutputError(
-            '工作流输出文件内容与媒体类型不匹配',
+            `工作流输出文件内容与媒体类型不匹配${detail}`,
             'OUTPUT_TYPE_MISMATCH',
           );
         }
@@ -398,11 +399,30 @@ export async function localizeWorkflowOutputs({
       await mkdir(paths.directory, { recursive: true });
       const { finalPath, metadataPath, filename: finalFilename } = paths;
       if (artifact.kind === 'video') {
-        const metadata = artifact.metadata || await probeMediaMetadata(downloadPath, 'videos');
-        const requiresConversion = artifact.extension !== '.mp4'
-          || (metadata.videoCodec && (metadata.videoCodec !== 'h264'
-            || !['yuv420p', 'yuvj420p'].includes(metadata.pixelFormat)))
-          || (metadata.audioCodec && metadata.audioCodec !== 'aac');
+        // ffprobe 不可用时（开发环境未打包）metadata 为空，跳过探测与转码，直接原样保存。
+        let metadata = artifact.metadata;
+        let requiresConversion = false;
+        if (metadata) {
+          requiresConversion = artifact.extension !== '.mp4'
+            || (metadata.videoCodec && (metadata.videoCodec !== 'h264'
+              || !['yuv420p', 'yuvj420p'].includes(metadata.pixelFormat)))
+            || (metadata.audioCodec && metadata.audioCodec !== 'aac');
+        } else {
+          try {
+            metadata = await probeMediaMetadata(downloadPath, 'videos');
+            requiresConversion = artifact.extension !== '.mp4'
+              || (metadata.videoCodec && (metadata.videoCodec !== 'h264'
+                || !['yuv420p', 'yuvj420p'].includes(metadata.pixelFormat)))
+              || (metadata.audioCodec && metadata.audioCodec !== 'aac');
+          } catch (error) {
+            if (error?.code === 'BUNDLED_MEDIA_PROBE_UNAVAILABLE') {
+              metadata = {};
+              requiresConversion = false;
+            } else {
+              throw error;
+            }
+          }
+        }
         const optimizedPath = `${downloadPath}.${crypto.randomUUID()}.faststart.mp4`;
         temporaryPaths.push(optimizedPath);
         try {
@@ -503,7 +523,8 @@ export async function localizeWorkflowOutputs({
     ]);
     await rm(runDirectory, { recursive: true, force: true });
     if (error instanceof WorkflowOutputError) throw error;
-    throw new WorkflowOutputError('工作流输出本地化失败', 'OUTPUT_LOCALIZE_FAILED');
+    const detail = error?.message ? `：${error.message}` : '';
+    throw new WorkflowOutputError(`工作流输出本地化失败${detail}`, 'OUTPUT_LOCALIZE_FAILED');
   }
 }
 

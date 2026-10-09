@@ -193,6 +193,17 @@ function vendorLink(href: string) {
   link.rel = 'noopener noreferrer';
   link.className = 'fisherai-button is-primary fisherai-key-link';
   link.setAttribute('aria-label', '获取密钥（在浏览器打开）');
+  // Same Electron workaround as the dreamina login link: route through the desktop
+  // bridge so a noopener new-window request never gets denied at about:blank.
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    const opener = window.aifisherDesktop?.openExternal;
+    if (opener) {
+      void opener(href).catch(() => window.open(href, '_blank', 'noopener'));
+    } else {
+      window.open(href, '_blank', 'noopener');
+    }
+  });
   return link;
 }
 
@@ -456,6 +467,20 @@ function dreaminaCliVendor(client: SourceSettingsClient, scope: SettingsScope) {
   loginLink.className =
     'inline-flex text-sm font-medium text-[var(--af-info)] hover:text-[var(--af-info)]';
   loginLink.setAttribute('data-fisherai-dreamina-login-link', 'true');
+  // In the Electron shell, a bare <a target="_blank" rel="noopener"> can land on an
+  // about:blank request that setWindowOpenHandler denies, leaving the click dead.
+  // Route through the desktop bridge so the URL goes straight to shell.openExternal.
+  loginLink.addEventListener('click', (event) => {
+    const url = loginLink.href;
+    if (!url) return;
+    event.preventDefault();
+    const opener = window.aifisherDesktop?.openExternal;
+    if (opener) {
+      void opener(url).catch(() => window.open(url, '_blank', 'noopener'));
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
+  });
   loginDetails.append(loginInstruction, loginCode, loginLink);
 
   const fallback = document.createElement('div');

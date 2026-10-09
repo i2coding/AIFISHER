@@ -291,8 +291,12 @@ export async function inspectMediaArtifact({
         metadata,
       };
     } catch (error) {
+      // ffprobe 组件不可用（例如开发环境未随包分发）：降级，不阻断输出。
+      // 此时 initial 已经根据文件头/扩展名/Content-Type 判断出 kind，足够用于展示。
+      if (error?.code === 'BUNDLED_MEDIA_PROBE_UNAVAILABLE') break;
       if (error?.code !== 'MEDIA_STREAM_NOT_FOUND') throw error;
     }
   }
+  if (initial.kind === 'video' || initial.kind === 'audio') return initial;
   throw new MediaArtifactError('媒体文件中没有可用的音视频流', 'MEDIA_ARTIFACT_CONTENT_INVALID');
 }

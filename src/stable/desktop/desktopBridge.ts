@@ -33,6 +33,8 @@ export interface AifisherDesktopBridge {
   returnToLogin(): Promise<void>;
   switchWorkspace?(): Promise<void>;
   openAdmin?(): Promise<void>;
+  /** Open an http(s) URL in the user's system browser via the main process. */
+  openExternal?(url: string): Promise<unknown>;
   showItemInFolder(path: string): Promise<void>;
   pathForFile(file: File): string; // 没有本机路径时返回 ''
   onBackendState(listener: (state: 'ready' | 'reconnecting') => void): () => void;

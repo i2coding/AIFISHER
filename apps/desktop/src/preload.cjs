@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('aifisherDesktop', {
   returnToLogin: () => invoke('desktop:return-to-login'),
   switchWorkspace: () => invoke('desktop:switch-workspace'),
   openAdmin: () => invoke('desktop:open-admin'),
+  openExternal: (url) => invoke('shell:open-external', String(url)),
   showItemInFolder: (target) => invoke('desktop:show-item-in-folder', String(target)),
   pathForFile: (file) => {
     try {

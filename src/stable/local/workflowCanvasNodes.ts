@@ -748,7 +748,7 @@ function expandedWorkflowHeight(node: CanvasNode): number {
   const settingsHeight =
     32 + 57 + slotsHeight + parametersHeight + Math.max(0, settingsSections - 1) * 16 + 106;
   const errorHeight = workflowErrorHeight(node);
-  const promptHeight = isCloudWorkflowNode(node) ? 166 : 0;
+  const promptHeight = isCloudWorkflowNode(node) ? 222 : 0;
   return Math.max(520, Math.min(100_000, 64 + promptHeight + settingsHeight + errorHeight + 66));
 }
 
@@ -1933,6 +1933,14 @@ export function createWorkflowCanvasNodes(
       return side === 'left' ? slots[nearest].slotIndex : nearest;
     },
     getNodeSize(node) {
+      // 用户手动拖过右下角 resize 手柄后，尊重用户设定的宽高，不再按参数数量硬算高度。
+      // 否则下面会被 expandedWorkflowHeight 的 Math.max(520, …) 撑出一大块空白。
+      if (node.manualSize) {
+        return {
+          width: finiteNumber(node.width, 600, 520, 760),
+          height: finiteNumber(node.height, 320, 200, 100000),
+        };
+      }
       const errorHeight = workflowErrorHeight(node);
       const progressHeight = node.status === 'loading' && !node.isWorkflowParametersOpen ? 44 : 0;
       return {

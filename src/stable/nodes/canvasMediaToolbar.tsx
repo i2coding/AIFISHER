@@ -231,10 +231,16 @@ export function CanvasMediaToolbar(React: Runtime, props: Props, components: Com
             <div className="w-px h-3 bg-[var(--af-selected)] mx-0.5" />
           </React.Fragment>
         )}
-        {imageTypes.has(node.type) &&
+        {(imageTypes.has(node.type) || videoTypes.has(node.type) || audioTypes.has(node.type)) &&
           fileInputRef &&
           action(
-            node.resultUrl ? '替换素材' : '上传图片',
+            node.resultUrl
+              ? '替换素材'
+              : imageTypes.has(node.type)
+                ? '上传图片'
+                : videoTypes.has(node.type)
+                  ? '上传视频'
+                  : '上传音频',
             components.replace,
             () => fileInputRef.current?.click(),
           )}

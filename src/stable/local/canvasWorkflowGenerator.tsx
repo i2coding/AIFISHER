@@ -388,8 +388,8 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
             onWheel={stop}
             style={{
               width: '100%',
-              height: '112px',
-              minHeight: 0,
+              height: '168px',
+              minHeight: '80px',
               padding: '10px 12px',
               border: '1px solid var(--af-border-control)',
               borderRadius: '8px',
@@ -398,7 +398,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
               fontSize: '13px',
               lineHeight: 1.65,
               outline: 'none',
-              resize: 'none',
+              resize: 'vertical',
               overflow: 'auto',
               cursor: readOnly ? 'default' : 'text',
             }}
@@ -1451,6 +1451,25 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
             {'×'}
           </div>
         ) : null}
+        {connectedSlots.map((slot) => (
+          <div
+            key={'connected-' + slot.id}
+            style={{
+              position: 'absolute',
+              left: '-4px',
+              top: (adapter?.getInputPortY(node, slot.slotIndex) || 228) + 'px',
+              transform: 'translateY(-50%)',
+              width: '8px',
+              height: '8px',
+              borderRadius: '999px',
+              background: 'var(--af-info)',
+              border: '2px solid var(--af-surface)',
+              boxShadow: '0 0 0 2px rgba(96,165,250,.25)',
+              zIndex: 15,
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
         {openSlots.map((slot) => (
           <div
             style={{
