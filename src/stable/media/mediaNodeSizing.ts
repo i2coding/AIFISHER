@@ -3,12 +3,15 @@ const ADAPTIVE_MEDIA_TYPES = new Set([
   'Upload Image',
   'Video',
   'Upload Video',
+  'Audio',
+  'Upload Audio',
 ]);
 
 const RESIZABLE_MEDIA_TYPES = new Set([
   ...ADAPTIVE_MEDIA_TYPES,
   'Image Compare',
   'Image Composite',
+  'ComfyUI',
 ]);
 
 export interface AdaptiveMediaNode {
