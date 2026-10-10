@@ -43,6 +43,43 @@ const MODE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
  */
 const PREMIUM_STORAGE_KEY = 'fisherai.model-picker.premium';
 
+/**
+ * 「厂商可见性」开关：每个 source 一个 toggle，默认全开。
+ *
+ * key 配了只是"能用"，这个开关开了才"显示"。两者是 AND 关系：
+ * 开关关掉的厂商，即使 API key 已配置，也不会出现在模型列表里。
+ * 它和 key 检查互不替代——只控制显示，不影响可用性。
+ */
+const SOURCE_TOGGLE_STORAGE_KEY = 'fisherai.model-picker.source-toggles';
+
+function readSourceToggles(): Record<string, boolean> {
+  try {
+    const raw = preferenceStorage()?.getItem(SOURCE_TOGGLE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, boolean>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function isSourceVisible(source: string): boolean {
+  // 默认 true：只有用户显式关掉的才隐藏。
+  return readSourceToggles()[source] !== false;
+}
+
+function setSourceVisible(source: string, visible: boolean): void {
+  try {
+    const toggles = readSourceToggles();
+    toggles[source] = visible;
+    preferenceStorage()?.setItem(SOURCE_TOGGLE_STORAGE_KEY, JSON.stringify(toggles));
+  } catch {
+    /* 隐私模式下写不进去就只在本次生效，不值得报错。 */
+  }
+}
+
 type ModelPricingLoader = (
   resolution: string | null,
   mode: string | null,
@@ -989,12 +1026,17 @@ export function mountModelPicker(
       // 2) 这个下拉只列本类模型（图片节点没有视频模型），按名字取交集；
       // 3) 只显示已经连接的来源；没填 API 的模型不占用创作下拉空间。
       // 4) 官方高价版默认收起来，见 applyPremiumFilter。
+      // 5) 厂商可见性开关：用户手动隐藏的厂商，即使 key 配了也不显示。
       const visibleGroups = (showPremium: boolean) =>
         selectableGroups
           .map((group) => ({
             ...group,
             variants: applyPremiumFilter(
-              group.variants.filter((variant) => variant.configured && byName.has(variant.name)),
+              group.variants.filter(
+                (variant) => variant.configured
+                  && byName.has(variant.name)
+                  && isSourceVisible(variant.source),
+              ),
               showPremium,
             ),
           }))
@@ -1114,6 +1156,7 @@ export function mountModelPicker(
             render();
           }),
         );
+
         list.replaceChildren(content);
       };
       render();

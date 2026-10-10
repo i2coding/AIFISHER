@@ -292,10 +292,12 @@ export class RunningHubWorkflowExecutor {
         if (signal.aborted) return { state: 'cancel-requested' };
         if (!(error instanceof RunningHubWorkflowClientError)) throw error;
         if (!error.retryable) throw error;
-        // 网络类可重试错误按全局「重试次数」计数；连续失败超过上限即抛错，
-        // 不再无限续轮直到总体超时。
-        consecutiveFailures += 1;
-        if (consecutiveFailures > access.retryMaxAttempts) throw error;
+        // 网络不可达（DNS/连接被拒）持续重试到总体超时，不因偶发网络抖动熔断；
+        // 其余可重试错误（限流 429 / 5xx / 单次查询超时）按全局重试上限计数。
+        if (error.code !== 'RUNNINGHUB_UNAVAILABLE') {
+          consecutiveFailures += 1;
+          if (consecutiveFailures > access.retryMaxAttempts) throw error;
+        }
         this.coordinator.update(runId, {
           phase: 'observing',
           code: error.code,

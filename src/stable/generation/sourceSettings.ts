@@ -27,6 +27,7 @@ import { scopeSourceSettingsClient } from './sourceSettingsClient';
 import { createSettingsScope, type SettingsScope } from './sourceSettingsScope';
 import { createLegacyRunningHubSettings } from './legacyRunningHubSettings';
 import { libTvCliVendor } from './libTvCliSettings';
+import { preferenceStorage } from '../persistence/preferenceStore';
 
 const PANEL_ATTRIBUTE = 'data-fisherai-source-settings';
 const MEDIA_LABELS: Record<MediaKind, string> = {
@@ -35,6 +36,105 @@ const MEDIA_LABELS: Record<MediaKind, string> = {
   text: '文本',
   audio: '音频',
 };
+
+/**
+ * 厂商在模型选择器里的可见性偏好。
+ *
+ * 存在 localStorage，和 modelPicker.ts 共用同一个 key。
+ * key 配了只是"能用"，这里的开关开了才"显示"——两者 AND。
+ * 默认全开（没存过就当显示）。
+ */
+const SOURCE_VISIBILITY_STORAGE_KEY = 'fisherai.model-picker.source-toggles';
+
+function readSourceVisibility(): Record<string, boolean> {
+  try {
+    const raw = preferenceStorage().getItem(SOURCE_VISIBILITY_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, boolean>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function sourceVisibleInPicker(source: string): boolean {
+  return readSourceVisibility()[source] !== false;
+}
+
+function setSourceVisibleInPicker(source: string, visible: boolean): void {
+  const toggles = readSourceVisibility();
+  toggles[source] = visible;
+  try {
+    preferenceStorage().setItem(SOURCE_VISIBILITY_STORAGE_KEY, JSON.stringify(toggles));
+  } catch {
+    /* 写不进去就只在本次生效 */
+  }
+}
+
+/** 标题行右侧的「在模型选择器中显示」滑动开关。全局偏好，不按节点存。 */
+function pickerVisibilityToggle(source: string, onChanged: () => void) {
+  const visible = sourceVisibleInPicker(source);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('data-fisherai-picker-visibility', source);
+  btn.setAttribute('role', 'switch');
+  btn.setAttribute('aria-checked', String(visible));
+  btn.setAttribute('aria-label', '在模型选择器中显示');
+  btn.className =
+    'shrink-0 inline-flex items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--af-focus)] ' +
+    (visible ? 'bg-[var(--af-primary)]' : 'bg-[var(--af-border-control)]');
+  Object.assign(btn.style, {
+    width: '40px',
+    height: '22px',
+    padding: '0',
+    border: 'none',
+    cursor: 'pointer',
+    position: 'relative',
+  });
+
+  const knob = document.createElement('span');
+  Object.assign(knob.style, {
+    position: 'absolute',
+    top: '2px',
+    width: '18px',
+    height: '18px',
+    borderRadius: '50%',
+    backgroundColor: '#fff',
+    transition: 'left 150ms',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+    left: visible ? '20px' : '2px',
+  });
+  btn.append(knob);
+
+  btn.title = visible
+    ? '在模型选择器中显示（点击隐藏该厂商所有模型，不影响 API Key 配置）'
+    : '已在模型选择器中隐藏（点击重新显示该厂商所有模型）';
+
+  const applyState = (next: boolean) => {
+    btn.setAttribute('aria-checked', String(next));
+    btn.style.backgroundColor = next ? '' : '';
+    btn.className =
+      'shrink-0 inline-flex items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--af-focus)] ' +
+      (next ? 'bg-[var(--af-primary)]' : 'bg-[var(--af-border-control)]');
+    knob.style.left = next ? '20px' : '2px';
+    btn.title = next
+      ? '在模型选择器中显示（点击隐藏该厂商所有模型，不影响 API Key 配置）'
+      : '已在模型选择器中隐藏（点击重新显示该厂商所有模型）';
+  };
+
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = !sourceVisibleInPicker(source);
+    setSourceVisibleInPicker(source, next);
+    applyState(next);
+    window.dispatchEvent(new CustomEvent('fisherai:model-sources-changed'));
+    onChanged();
+  });
+  return btn;
+}
 
 const BLOCK_NOTES: Record<string, string> = {
   relay:
@@ -1062,9 +1162,20 @@ function renderBlock(
     header,
     body,
     'data-fisherai-source-toggle',
-    'flex w-full items-center justify-between gap-5 px-6 py-5 text-left hover:bg-[var(--af-input)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400',
+    'flex flex-1 items-center justify-between gap-5 px-6 py-5 text-left hover:bg-[var(--af-input)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400',
   );
-  card.append(sourceToggle, body);
+  // 顶部一行：左边是展开按钮（占满），右边是滑动开关（垂直居中，不嵌套在 button 里）。
+  const topRow = document.createElement('div');
+  topRow.className = 'flex items-stretch';
+  const visibilityWrap = document.createElement('div');
+  Object.assign(visibilityWrap.style, {
+    display: 'flex',
+    alignItems: 'center',
+    paddingRight: '16px',
+  });
+  visibilityWrap.append(pickerVisibilityToggle(block.source, () => {}));
+  topRow.append(sourceToggle, visibilityWrap);
+  card.append(topRow, body);
   return card;
 }
 
