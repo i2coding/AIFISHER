@@ -1381,7 +1381,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
                 aria-label={'参数配置'}
                 aria-controls={'fisherai-workflow-settings-' + node.id}
                 aria-expanded={settings}
-                onClick={() => patch({ isWorkflowParametersOpen: !settings })}
+                onClick={() => patch({ isWorkflowParametersOpen: !settings, manualSize: false })}
                 onPointerDown={stop}
                 style={{
                   height: '38px',
