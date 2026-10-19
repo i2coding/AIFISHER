@@ -85,6 +85,10 @@ function fieldKind(field) {
 }
 
 function defaultValue(field, kind, options) {
+  // 素材类字段（图片/视频/音频）在 RunningHub 接口里返回的 fieldValue 是最近一次
+  // 调用时上传的文件 URL，会随每次运行被平台记住；把它当默认值会让新节点自动带上
+  // 次的图片/视频。这类字段强制空值，由用户运行时自行上传或连线。
+  if (MEDIA_KINDS.has(kind)) return '';
   const value = field?.fieldValue ?? field?.defaultValue ?? field?.value;
   if (kind === 'select') return options.some((option) => Object.is(option, value))
     ? value

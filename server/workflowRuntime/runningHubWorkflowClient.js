@@ -103,7 +103,7 @@ export function assertRunningHubRemoteId(value, label = 'RunningHub 工作流标
 }
 
 export function normalizeRunningHubInstanceType(value) {
-  const normalized = String(value || 'plus').trim().toLowerCase();
+  const normalized = String(value || 'default').trim().toLowerCase();
   if (!RUNNINGHUB_INSTANCE_TYPES.has(normalized)) {
     throw new RunningHubWorkflowClientError(
       'RunningHub 机器配置无效；当前仅支持 Standard 24GB 与 Plus 48GB',

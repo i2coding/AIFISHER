@@ -98,7 +98,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
       : parameters,
     settings = !!node.isWorkflowParametersOpen,
     instanceType =
-      String(node.runningHubInstanceType || '').toLowerCase() === 'default' ? 'default' : 'plus',
+      String(node.runningHubInstanceType || '').toLowerCase() === 'plus' ? 'plus' : 'default',
     errorDetails = !!node.isWorkflowErrorDetailsOpen,
     errorSummary = node.errorSummary || adapter?.getErrorSummary(node) || '工作流运行失败',
     errorDetailsId = 'fisherai-workflow-error-details-' + node.id,

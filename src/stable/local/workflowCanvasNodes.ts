@@ -87,7 +87,7 @@ export function workflowErrorSummary(value: unknown): string {
 }
 
 function canvasRunningHubInstanceType(value: unknown): RunningHubInstanceType {
-  return String(value || '').toLowerCase() === 'default' ? 'default' : 'plus';
+  return String(value || '').toLowerCase() === 'plus' ? 'plus' : 'default';
 }
 
 export interface WorkflowCanvasOutputValue {

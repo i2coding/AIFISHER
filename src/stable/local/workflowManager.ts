@@ -1,6 +1,8 @@
-import { createOfficialWorkflowGallery, officialWorkflowStyles } from './officialWorkflowGallery';
+import { officialWorkflowStyles } from './officialWorkflowGallery';
 import type { OfficialWorkflow } from './workflowManagerClient';
 import { activateModal } from '../design/modalFocus';
+import { officialSkillCover } from '../skills/officialSkillCovers';
+import characterCover from './assets/official-character.svg';
 import type {
   BindingCandidate,
   BindingSet,
@@ -551,12 +553,12 @@ export function createWorkflowManager(
   let pollToken = 0;
   const libraryContext = options.initialView === 'library';
   let managerView: 'library' | 'manager' = libraryContext ? 'library' : 'manager';
-  let libraryRunnerScope: 'local' | 'cloud' = 'local';
-  let librarySection: 'official' | 'mine' = 'official';
+  let libraryRunnerScope: 'local' | 'cloud' = 'cloud';
   let officialWorkflows: OfficialWorkflow[] = [];
   let officialError = '';
   let officialLoaded = false;
   let libraryCloudImport = false;
+  let libraryMarket = false;
   let officialConnection: OfficialWorkflow | null = null;
   let projectsLoaded = false;
   let libraryReadFailures: WorkflowDefinition[] = [];
@@ -1393,97 +1395,62 @@ export function createWorkflowManager(
     const navigation = element('nav', 'fwm-library-navigation');
     navigation.setAttribute('aria-label', '工作流来源');
     for (const [id, label] of [
-      ['official', '官方推荐'],
       ['local', '我的本地工作流'],
       ['cloud', '我的云端工作流'],
     ] as const) {
       const tab = button(label, 'ghost');
       tab.setAttribute('data-fisherai-workflow-library-scope', id);
-      tab.setAttribute(
-        'aria-pressed',
-        String(
-          id === 'official'
-            ? librarySection === 'official'
-            : librarySection === 'mine' && libraryRunnerScope === id,
-        ),
-      );
+      tab.setAttribute('aria-pressed', String(libraryRunnerScope === id));
       tab.onclick = () => {
         libraryCloudImport = false;
         officialConnection = null;
-        librarySection = id === 'official' ? 'official' : 'mine';
-        if (id !== 'official') libraryRunnerScope = id;
+        libraryRunnerScope = id;
         render();
       };
       navigation.append(tab);
     }
     panel.append(navigation);
-    if (librarySection === 'official') {
-      if (officialConnection) {
-        const heading = element('div', 'fwm-library-toolbar-copy');
-        heading.append(
-          element('h3', '', `连接后使用：${officialConnection.name}`),
-          element('p', '', '保存国内站连接后，返回官方推荐直接添加，无需查找工作流链接。'),
-        );
-        const back = button('返回官方推荐', 'ghost');
-        back.onclick = () => {
-          officialConnection = null;
-          render();
-        };
-        panel.append(
-          heading,
-          back,
-          createRunningHubQuickAdd(client, {
-            connectDomesticOnly: {
-              onConnected: async () => {
-                await loadOfficial();
-                if (!host.isConnected) return;
-                officialConnection = null;
-                render();
-              },
-            },
-          }),
-        );
+
+    // ===== 工作流市场：安装官方工作流到我的库 =====
+    const installOfficialWorkflow = async (item: OfficialWorkflow) => {
+      if (!item.configured) {
+        officialConnection = item;
+        render();
         return;
       }
-      if (!officialLoaded || officialError) {
-        const notice = element('div', 'fwm-library-empty', officialError || '正在读取官方工作流…');
-        if (officialError) {
-          const retry = button('重新读取');
-          retry.onclick = () => {
-            retry.disabled = true;
-            void loadOfficial().then(render);
-          };
-          notice.append(retry);
-        }
-        panel.append(notice);
-        return;
-      }
+      await client.addOfficialWorkflow(item.id);
+      if (!host.isConnected) return;
+      officialWorkflows = await client.listOfficialWorkflows();
+      state.definitions = await client.listDefinitions();
+      await loadDeployedRecords();
+      setNotice(`“${item.name}”已添加到我的工作流，可在云端列表里使用。`, 'success');
+      render();
+    };
+
+    // 连接 RunningHub 国内站界面（cloud tab 或市场页触发）
+    if ((libraryRunnerScope === 'cloud' || libraryMarket) && officialConnection) {
+      const heading = element('div', 'fwm-library-toolbar-copy');
+      heading.append(
+        element('h3', '', `连接后使用：${officialConnection.name}`),
+        element('p', '', '保存国内站连接后，即可在工作流市场里添加该工作流。'),
+      );
+      const back = button('返回', 'ghost');
+      back.onclick = () => {
+        officialConnection = null;
+        render();
+      };
       panel.append(
-        createOfficialWorkflowGallery(officialWorkflows, async (item) => {
-          if (!item.configured) {
-            officialConnection = item;
-            render();
-            return;
-          }
-          const adapter = window.__FISHERAI_WORKFLOW_NODES__;
-          if (!adapter) throw new Error('请先打开画布项目，再添加工作流。');
-          const app = await client.addOfficialWorkflow(item.id);
-          if (!host.isConnected || window.__FISHERAI_WORKFLOW_NODES__ !== adapter) return;
-          const snapshot = await client.getEditorSnapshot(app.definitionId);
-          if (!host.isConnected || window.__FISHERAI_WORKFLOW_NODES__ !== adapter) return;
-          if (!snapshot.deployment || !snapshot.bindingSet)
-            throw new Error('工作流配置尚未就绪，请重新加载。');
-          const blueprint = await client.createCanvasNode(app.definitionId, {
-            deploymentId: snapshot.deployment.id,
-            bindingSetId: snapshot.bindingSet.id,
-            title: item.name,
-          });
-          if (!host.isConnected || window.__FISHERAI_WORKFLOW_NODES__ !== adapter) return;
-          const insertion = await adapter.addToCanvas(blueprint);
-          focusInsertedWorkflow(insertion?.nodeIds);
-          setNotice(`${item.name} 已添加到画布。连接素材后即可运行。`, 'success');
-          state.definitions = await client.listDefinitions();
-          await loadDeployedRecords();
+        heading,
+        back,
+        createRunningHubQuickAdd(client, {
+          connectDomesticOnly: {
+            onConnected: async () => {
+              await loadOfficial();
+              if (!host.isConnected) return;
+              officialConnection = null;
+              render();
+            },
+          },
         }),
       );
       return;
@@ -1517,6 +1484,77 @@ export function createWorkflowManager(
       );
       return;
     }
+
+    // ===== 工作流市场（独立视图）=====
+    if (libraryMarket) {
+      const marketHead = element('div', 'fwm-library-toolbar');
+      const marketCopy = element('div', 'fwm-library-toolbar-copy');
+      marketCopy.append(
+        element('h4', '', '工作流市场'),
+        element('p', '', '官方 SKILL 同款工作流，点「添加到我的工作流」一键导入；导入后在下方云端列表里管理。'),
+      );
+      const back = button('返回我的工作流', 'ghost');
+      back.addEventListener('click', () => {
+        libraryMarket = false;
+        render();
+      });
+      marketHead.append(marketCopy, back);
+      panel.append(marketHead);
+
+      if (officialError) {
+        panel.append(element('div', 'fwm-notice is-error', officialError));
+      } else if (!officialLoaded) {
+        panel.append(element('div', 'fwm-library-empty', '正在读取工作流市场…'));
+      } else {
+        const grid = element('div', 'fwm-card-grid');
+        for (const item of officialWorkflows) {
+          const card = element('article', 'fwm-workflow-card');
+          card.dataset.searchValue = `${item.name} 官方`.toLocaleLowerCase('zh-CN');
+          const cover = element('div', 'fwm-card-cover');
+          const coverSrc = item.id === 'official-character'
+            ? characterCover
+            : officialSkillCover({ slug: item.skillSlug, source: 'official' });
+          if (coverSrc) {
+            const img = element('img', 'fwm-card-media');
+            img.src = coverSrc;
+            img.alt = '';
+            img.loading = 'lazy';
+            cover.append(img);
+          }
+          const badges = element('div', 'fwm-card-badges');
+          badges.append(element('span', 'fwm-card-badge', '官方'));
+          cover.append(badges);
+          const body = element('div', 'fwm-card-body');
+          body.append(element('span', 'fwm-card-title', item.name));
+          const meta = element('div', 'fwm-card-meta');
+          meta.append(
+            element('span', '', item.categoryId === 'image' ? '图片工作流' : '视频工作流'),
+            element('span', 'fwm-card-meta-separator'),
+            element('span', '', item.output),
+          );
+          body.append(meta);
+          const actions = element('div', 'fwm-card-actions');
+          const add = button(item.configured ? '添加到我的工作流' : '连接并使用', 'primary');
+          add.addEventListener('click', () => {
+            add.disabled = true;
+            add.textContent = '正在添加…';
+            void installOfficialWorkflow(item)
+              .catch((error: unknown) => {
+                setNotice(messageFor(error), 'error');
+                add.disabled = false;
+                add.textContent = item.configured ? '添加到我的工作流' : '连接并使用';
+              });
+          });
+          actions.append(add);
+          body.append(actions);
+          card.append(cover, body);
+          grid.append(card);
+        }
+        panel.append(grid);
+      }
+      return;
+    }
+
     const visibleRecords = state.deployedRecords.filter((record) =>
       libraryRunnerScope === 'cloud'
         ? isRunningHubRunner(record.deployment?.runner)
@@ -1544,13 +1582,19 @@ export function createWorkflowManager(
     if (libraryRunnerScope === 'local') {
       actions.append(importWorkflow, scanDirectory, advanced);
     } else {
+      const market = button('工作流市场', 'ghost');
+      market.setAttribute('data-fisherai-open-market', 'true');
+      market.addEventListener('click', () => {
+        libraryMarket = true;
+        render();
+      });
       const loadCloud = button('加载云端工作流', 'primary');
       loadCloud.setAttribute('data-fisherai-load-cloud-workflow', 'true');
       loadCloud.addEventListener('click', () => {
         libraryCloudImport = true;
         render();
       });
-      actions.append(loadCloud);
+      actions.append(market, loadCloud);
     }
     toolbar.append(copy, actions);
     panel.append(toolbar);
@@ -1585,13 +1629,15 @@ export function createWorkflowManager(
         element(
           'strong',
           '',
-          libraryRunnerScope === 'cloud' ? '还没有云端工作流' : '还没有可用的本地工作流',
+          libraryRunnerScope === 'cloud'
+            ? '还没有已添加的云端工作流'
+            : '还没有可用的本地工作流',
         ),
         element(
           'span',
           '',
           libraryRunnerScope === 'cloud'
-            ? '直接输入 RunningHub 链接或应用 ID 即可加载。'
+            ? '从上面「官方精选」一键添加，或输入 RunningHub 链接加载自己的工作流。'
             : '点击导入或将 ComfyUI API JSON 直接拖到这里，即可导入并添加。',
         ),
       );
@@ -3298,7 +3344,6 @@ export function createWorkflowManager(
   });
   const canDropWorkflow = () =>
     managerView === 'library' &&
-    librarySection === 'mine' &&
     libraryRunnerScope === 'local' &&
     host.dataset.busy !== 'true';
   panel.addEventListener('dragover', (event) => {
@@ -3366,10 +3411,7 @@ export function createWorkflowManager(
   }
 
   if (libraryContext)
-    void loadOfficial().then(() => {
-      if (!officialWorkflows.length && !officialError) librarySection = 'mine';
-      render();
-    });
+    void loadOfficial().then(render);
   void Promise.all([client.listDefinitions(), client.listProjects()])
     .then(async ([definitions, projects]) => {
       const scopedDefinitions =
