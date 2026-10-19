@@ -176,7 +176,7 @@ export function CanvasMediaToolbar(React: Runtime, props: Props, components: Com
                   }
                 }}
               >
-                <Tooltip text={rhConfigured === false ? "AI 高清放大 · SeedVR2（需绑定 RunningHub 国内站 API Key）" : "AI 高清放大 · SeedVR2"}>
+                <Tooltip text={rhConfigured === false ? "AI 高清放大 · SeedVR2（需绑定 RunningHub 海外站 API Key）" : "AI 高清放大 · SeedVR2"}>
                   <button
                     type="button"
                     aria-label="AI 高清放大"
@@ -206,12 +206,12 @@ export function CanvasMediaToolbar(React: Runtime, props: Props, components: Com
                         ×
                       </button>
                     </div>
-                    {rhConfigured === false && <p className="text-xs leading-6 text-[var(--af-text-secondary)]">请先在设置中绑定 RunningHub 国内站 API Key。</p>}
+                    {rhConfigured === false && <p className="text-xs leading-6 text-[var(--af-text-secondary)]">请先在设置中绑定 RunningHub 海外站 API Key。</p>}
                     <p className="text-xs leading-6 text-[var(--af-text-secondary)]">
                       使用云端应用默认放大设置，原图保留，输出另建卡片。
                     </p>
                     <p className="text-xs leading-6 text-[var(--af-text-secondary)] mt-2">
-                      将上传此图至 RunningHub 国内站，使用 Standard 24GB 和你的 Key 计费；费用以 RH
+                      将上传此图至 RunningHub 海外站，使用 Standard 24GB 和你的 Key 计费；费用以 RH
                       账单为准。需要等待云端处理。
                     </p>
                     <button
