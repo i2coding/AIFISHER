@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   analyzeWorkflow,
@@ -222,10 +222,15 @@ export class WorkflowDefinitionStore {
       .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
   }
 
-  async deleteDefinition(definitionId) {
+  async deleteDefinition(definitionId, options = {}) {
+    const { permanent = false } = options;
     return this.withDefinitionLock(definitionId, async () => {
       const definition = await this.requireDefinition(definitionId);
       if (definition.deletedAt) {
+        if (permanent) {
+          await rm(this.definitionDirectory(definitionId), { recursive: true, force: true });
+          return { id: definition.id, deletedAt: definition.deletedAt, alreadyDeleted: true, permanentlyDeleted: true };
+        }
         return {
           id: definition.id,
           deletedAt: definition.deletedAt,
@@ -233,6 +238,10 @@ export class WorkflowDefinitionStore {
         };
       }
       const deletedAt = new Date().toISOString();
+      if (permanent) {
+        await rm(this.definitionDirectory(definitionId), { recursive: true, force: true });
+        return { id: definition.id, deletedAt, alreadyDeleted: false, permanentlyDeleted: true };
+      }
       const next = {
         ...definition,
         deletedAt,

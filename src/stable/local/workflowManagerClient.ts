@@ -288,10 +288,11 @@ export interface WorkflowManagerClient {
   listDefinitions(): Promise<WorkflowDefinition[]>;
   getDefinition(definitionId: string): Promise<WorkflowDefinition>;
   getEditorSnapshot(definitionId: string): Promise<WorkflowEditorSnapshot>;
-  deleteDefinition(definitionId: string): Promise<{
+  deleteDefinition(definitionId: string, options?: { permanent?: boolean }): Promise<{
     id: string;
     deletedAt: string;
     alreadyDeleted: boolean;
+    permanentlyDeleted?: boolean;
   }>;
   updateDefinitionPresentation(
     definitionId: string,
@@ -447,6 +448,7 @@ export interface WorkflowManagerClient {
   }>;
   listOfficialWorkflows(): Promise<OfficialWorkflow[]>;
   addOfficialWorkflow(id: string): Promise<RunningHubWebAppCard>;
+  resolveRunningHubWebApp(webAppId: string, credentialRef?: 'runninghub-cn' | 'runninghub-global'): Promise<{ webAppId: string; title: string; categoryId: string }>;
   listRunningHubWebApps(): Promise<RunningHubWebAppLibrary>;
   createRunningHubWebApp(input: {
     webAppId: string;
@@ -617,9 +619,10 @@ export function createWorkflowManagerClient(fetcher: typeof fetch = fetch): Work
     listDefinitions: () => api('/api/workflow-library'),
     getDefinition: (definitionId) => api(libraryPath(definitionId)),
     getEditorSnapshot: (definitionId) => api(libraryPath(definitionId, '/editor-snapshot')),
-    deleteDefinition: (definitionId) => api(libraryPath(definitionId), {
-      method: 'DELETE',
-    }),
+    deleteDefinition: (definitionId, options: { permanent?: boolean } = {}) =>
+      api(libraryPath(definitionId, options.permanent ? '?permanent=true' : ''), {
+        method: 'DELETE',
+      }),
     updateDefinitionPresentation: (definitionId, input) =>
       api(libraryPath(definitionId, '/presentation'), {
         method: 'PATCH',
@@ -784,6 +787,10 @@ export function createWorkflowManagerClient(fetcher: typeof fetch = fetch): Work
     listRunningHubWebApps: () => api('/api/runninghub-webapps'),
     listOfficialWorkflows: async () => (await api<{ workflows: OfficialWorkflow[] }>('/api/official-workflows')).workflows,
     addOfficialWorkflow: (id) => api(`/api/official-workflows/${encodeURIComponent(id)}/add`, { method: 'POST', body: '{}' }),
+    resolveRunningHubWebApp: (webAppId, credentialRef = 'runninghub-cn') => api('/api/runninghub-webapps/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ webAppId, credentialRef }),
+    }),
     createRunningHubWebApp: (input) => api('/api/runninghub-webapps', {
       method: 'POST',
       body: JSON.stringify(input),

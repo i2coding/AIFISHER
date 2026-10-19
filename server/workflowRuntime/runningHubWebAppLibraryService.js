@@ -101,6 +101,27 @@ export class RunningHubWebAppLibraryService {
     }));
   }
 
+  async resolveWebApp(webAppId, credentialRef = 'runninghub-cn') {
+    const normalizedWebAppId = String(webAppId || '').trim();
+    if (!normalizedWebAppId) throw new RunningHubWebAppLibraryError('缺少应用 ID', 'WEBAPP_ID_REQUIRED', 400);
+    const apiKey = await this.credentialResolver(credentialRef);
+    if (!apiKey) throw new RunningHubWebAppLibraryError('请先在云端工作流页填写 RunningHub API Key', 'RUNNINGHUB_CREDENTIAL_MISSING', 409);
+    const baseUrl = baseUrlFor(credentialRef);
+    const client = this.clientFactory({ baseUrl, apiKey, timeoutMs: 60_000 });
+    const resolved = client.resolveWebAppInfo
+      ? await client.resolveWebAppInfo(normalizedWebAppId)
+      : { apiProtocol: 'legacy-webapp-v1', info: await client.getWebAppInfo(normalizedWebAppId) };
+    const rawInfo = resolved.info;
+    const projection = createRunningHubWebAppProjection(normalizedWebAppId, rawInfo);
+    return {
+      webAppId: projection.snapshot.webAppId,
+      title: projection.snapshot.appName,
+      categoryId: projection.snapshot.categoryId,
+      description: '',
+      apiProtocol: resolved.apiProtocol,
+    };
+  }
+
   async addOfficialWorkflow(id) {
     const item = OFFICIAL_WORKFLOWS.find((entry) => entry.id === id);
     if (!item) throw new RunningHubWebAppLibraryError('官方工作流不存在', 'OFFICIAL_WORKFLOW_NOT_FOUND', 404);

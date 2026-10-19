@@ -229,7 +229,8 @@ export function createWorkflowLibraryRouter({
 
   router.delete('/workflow-library/:id', async (request, response) => {
     try {
-      response.json(await definitionStore.deleteDefinition(request.params.id));
+      const permanent = request.query.permanent === 'true';
+      response.json(await definitionStore.deleteDefinition(request.params.id, { permanent }));
     } catch (error) {
       sendError(response, error, logger);
     }

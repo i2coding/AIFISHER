@@ -1139,13 +1139,16 @@ export function createWorkflowManager(
     const note = element(
       'p',
       'fwm-delete-note',
-      '原始 JSON 文件不会被删除；已经添加到画布的节点也会保留。',
+      '「从列表移除」保留磁盘上的原始 JSON；「永久删除」会连同文件一起删掉，不可恢复。已经添加到画布的节点不受影响。',
     );
     const footer = element('div', 'fwm-presentation-footer');
     const cancel = button('取消', 'ghost');
-    const confirm = button('删除工作流');
-    confirm.classList.add('is-danger');
-    footer.append(cancel, confirm);
+    const softDelete = button('从列表移除');
+    softDelete.classList.add('is-danger');
+    const hardDelete = button('永久删除');
+    hardDelete.classList.add('is-danger');
+    hardDelete.classList.add('fwm-delete-hard');
+    footer.append(cancel, softDelete, hardDelete);
     dialog.append(
       element('p', 'fwm-delete-eyebrow', 'REMOVE FROM LIBRARY'),
       title,
@@ -1157,6 +1160,7 @@ export function createWorkflowManager(
     document.body.append(layer);
 
     let closed = false;
+    let confirmingHard = false;
     const close = (restoreFocus = true) => {
       if (closed) return;
       closed = true;
@@ -1169,32 +1173,63 @@ export function createWorkflowManager(
     layer.addEventListener('click', (event) => {
       if (event.target === layer) close();
     });
-    confirm.addEventListener('click', () => {
-      void (async () => {
-        confirm.disabled = true;
-        cancel.disabled = true;
-        confirm.textContent = '正在删除…';
-        try {
-          await client.deleteDefinition(record.definition.id);
-          state.definitions = state.definitions.filter(
-            (definition) => definition.id !== record.definition.id,
-          );
-          state.deployedRecords = state.deployedRecords.filter(
-            (item) => item.definition.id !== record.definition.id,
-          );
-          if (state.selected?.id === record.definition.id) resetDraft();
-          close(false);
-          setNotice(`“${record.definition.name}”已从工作流节点库删除。`, 'success');
-          render();
-        } catch (error) {
-          confirm.disabled = false;
-          cancel.disabled = false;
-          confirm.textContent = '删除工作流';
-          setNotice(messageFor(error), 'error');
-        }
-      })();
+
+    const doDelete = async (permanent: boolean) => {
+      softDelete.disabled = true;
+      hardDelete.disabled = true;
+      cancel.disabled = true;
+      softDelete.textContent = permanent ? '正在永久删除…' : '正在删除…';
+      hardDelete.textContent = '…';
+      try {
+        await client.deleteDefinition(record.definition.id, { permanent });
+        state.definitions = state.definitions.filter(
+          (definition) => definition.id !== record.definition.id,
+        );
+        state.deployedRecords = state.deployedRecords.filter(
+          (item) => item.definition.id !== record.definition.id,
+        );
+        if (state.selected?.id === record.definition.id) resetDraft();
+        close(false);
+        setNotice(
+          permanent
+            ? `“${record.definition.name}”已永久删除，磁盘文件已清理。`
+            : `“${record.definition.name}”已从工作流节点库移除（文件保留）。`,
+          'success',
+        );
+        render();
+      } catch (error) {
+        softDelete.disabled = false;
+        hardDelete.disabled = false;
+        cancel.disabled = false;
+        softDelete.textContent = '从列表移除';
+        hardDelete.textContent = confirmingHard ? '确认永久删除' : '永久删除';
+        setNotice(messageFor(error), 'error');
+      }
+    };
+
+    softDelete.addEventListener('click', () => void doDelete(false));
+    hardDelete.addEventListener('click', () => {
+      if (!confirmingHard) {
+        confirmingHard = true;
+        title.textContent = '永久删除？';
+        note.textContent = `将彻底删除磁盘上 ${record.definition.name} 的所有文件（原始 JSON、执行计划），不可恢复。已添加到画布的节点仍保留但可能无法运行。`;
+        hardDelete.textContent = '确认永久删除';
+        softDelete.textContent = '取消永久删除';
+        softDelete.classList.remove('is-danger');
+        softDelete.addEventListener('click', function revert() {
+          confirmingHard = false;
+          title.textContent = '删除这个工作流？';
+          note.textContent = '「从列表移除」保留磁盘上的原始 JSON；「永久删除」会连同文件一起删掉，不可恢复。已经添加到画布的节点不受影响。';
+          hardDelete.textContent = '永久删除';
+          softDelete.textContent = '从列表移除';
+          softDelete.classList.add('is-danger');
+          softDelete.removeEventListener('click', revert);
+        });
+        hardDelete.focus();
+        return;
+      }
+      void doDelete(true);
     });
-    cancel.focus();
   };
 
   const createDeployedCard = (record: DeployedWorkflowRecord) => {
@@ -1412,6 +1447,19 @@ export function createWorkflowManager(
     panel.append(navigation);
 
     // ===== 工作流市场：安装官方工作流到我的库 =====
+    const MARKET_RECS_KEY = 'aifisher:market-recommendations';
+    type MarketRec = { webAppId: string; title: string; categoryId: string; credentialRef: 'runninghub-cn' | 'runninghub-global' };
+    const readMarketRecs = (): MarketRec[] => {
+      try {
+        const raw = window.localStorage.getItem(MARKET_RECS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch { return []; }
+    };
+    const writeMarketRecs = (recs: MarketRec[]) => {
+      try { window.localStorage.setItem(MARKET_RECS_KEY, JSON.stringify(recs)); } catch {}
+    };
+
     const installOfficialWorkflow = async (item: OfficialWorkflow) => {
       if (!item.configured) {
         officialConnection = item;
@@ -1491,7 +1539,7 @@ export function createWorkflowManager(
       const marketCopy = element('div', 'fwm-library-toolbar-copy');
       marketCopy.append(
         element('h4', '', '工作流市场'),
-        element('p', '', '官方 SKILL 同款工作流，点「添加到我的工作流」一键导入；导入后在下方云端列表里管理。'),
+        element('p', '', '官方 SKILL 同款工作流；也可粘贴 RunningHub 链接添加自己的推荐。点「添加到我的工作流」一键导入。'),
       );
       const back = button('返回我的工作流', 'ghost');
       back.addEventListener('click', () => {
@@ -1501,56 +1549,164 @@ export function createWorkflowManager(
       marketHead.append(marketCopy, back);
       panel.append(marketHead);
 
+      // ---- 添加推荐输入框 ----
+      const addRec = element('div', 'fwm-market-addrec');
+      const siteGroup = element('div', 'fwm-market-sitegroup');
+      let marketSite: 'runninghub-cn' | 'runninghub-global' = 'runninghub-cn';
+      const cnBtn = button('CN', 'ghost');
+      const aiBtn = button('AI', 'ghost');
+      const syncSite = () => {
+        cnBtn.setAttribute('aria-pressed', String(marketSite === 'runninghub-cn'));
+        aiBtn.setAttribute('aria-pressed', String(marketSite === 'runninghub-global'));
+      };
+      cnBtn.addEventListener('click', () => { marketSite = 'runninghub-cn'; syncSite(); });
+      aiBtn.addEventListener('click', () => { marketSite = 'runninghub-global'; syncSite(); });
+      syncSite();
+      siteGroup.append(cnBtn, aiBtn);
+      const recInput = document.createElement('input');
+      recInput.type = 'text';
+      recInput.placeholder = '粘贴 RunningHub 链接或输入应用 ID';
+      recInput.className = 'fwm-market-rec-input';
+      const recAdd = button('读取并添加推荐', 'primary');
+      recAdd.addEventListener('click', () => {
+        const raw = recInput.value.trim();
+        if (!raw) return;
+        const idMatch = raw.match(/ai-detail\/(\d+)/) || raw.match(/(\d{10,})/);
+        const webAppId = idMatch ? idMatch[1] : raw;
+        const credentialRef = marketSite;
+        recAdd.disabled = true;
+        recAdd.textContent = '验证中…';
+        void client.resolveRunningHubWebApp(webAppId, credentialRef)
+          .then((info) => {
+            const recs = readMarketRecs();
+            if (recs.some((r) => r.webAppId === info.webAppId)) {
+              setNotice('这个工作流已在我的推荐里', 'success');
+            } else {
+              recs.push({ webAppId: info.webAppId, title: info.title, categoryId: info.categoryId, credentialRef });
+              writeMarketRecs(recs);
+              setNotice(`已添加推荐：${info.title}（${marketSite === 'runninghub-cn' ? 'CN 站' : 'AI 站'}）`, 'success');
+            }
+            recInput.value = '';
+            render();
+          })
+          .catch((error: unknown) => {
+            setNotice(messageFor(error), 'error');
+          })
+          .finally(() => {
+            recAdd.disabled = false;
+            recAdd.textContent = '添加推荐';
+          });
+      });
+      recInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') recAdd.click();
+      });
+      addRec.append(siteGroup, recInput, recAdd);
+      panel.append(addRec);
+
+      // ---- 官方推荐 ----
       if (officialError) {
         panel.append(element('div', 'fwm-notice is-error', officialError));
       } else if (!officialLoaded) {
         panel.append(element('div', 'fwm-library-empty', '正在读取工作流市场…'));
       } else {
-        const grid = element('div', 'fwm-card-grid');
-        for (const item of officialWorkflows) {
-          const card = element('article', 'fwm-workflow-card');
-          card.dataset.searchValue = `${item.name} 官方`.toLocaleLowerCase('zh-CN');
-          const cover = element('div', 'fwm-card-cover');
-          const coverSrc = item.id === 'official-character'
-            ? characterCover
-            : officialSkillCover({ slug: item.skillSlug, source: 'official' });
-          if (coverSrc) {
-            const img = element('img', 'fwm-card-media');
-            img.src = coverSrc;
-            img.alt = '';
-            img.loading = 'lazy';
-            cover.append(img);
+        if (officialWorkflows.length) {
+          panel.append(element('h5', 'fwm-market-section', '官方推荐'));
+          const grid = element('div', 'fwm-card-grid');
+          for (const item of officialWorkflows) {
+            const card = element('article', 'fwm-workflow-card');
+            card.dataset.searchValue = `${item.name} 官方`.toLocaleLowerCase('zh-CN');
+            const cover = element('div', 'fwm-card-cover');
+            const coverSrc = item.id === 'official-character'
+              ? characterCover
+              : officialSkillCover({ slug: item.skillSlug, source: 'official' });
+            if (coverSrc) {
+              const img = element('img', 'fwm-card-media');
+              img.src = coverSrc;
+              img.alt = '';
+              img.loading = 'lazy';
+              cover.append(img);
+            }
+            const badges = element('div', 'fwm-card-badges');
+            badges.append(element('span', 'fwm-card-badge', '官方'));
+            cover.append(badges);
+            const body = element('div', 'fwm-card-body');
+            body.append(element('span', 'fwm-card-title', item.name));
+            const meta = element('div', 'fwm-card-meta');
+            meta.append(
+              element('span', '', item.categoryId === 'image' ? '图片工作流' : '视频工作流'),
+              element('span', 'fwm-card-meta-separator'),
+              element('span', '', item.output),
+            );
+            body.append(meta);
+            const actions = element('div', 'fwm-card-actions');
+            const add = button(item.configured ? '添加到我的工作流' : '连接并使用', 'primary');
+            add.addEventListener('click', () => {
+              add.disabled = true;
+              add.textContent = '正在添加…';
+              void installOfficialWorkflow(item)
+                .catch((error: unknown) => {
+                  setNotice(messageFor(error), 'error');
+                  add.disabled = false;
+                  add.textContent = item.configured ? '添加到我的工作流' : '连接并使用';
+                });
+            });
+            actions.append(add);
+            body.append(actions);
+            card.append(cover, body);
+            grid.append(card);
           }
-          const badges = element('div', 'fwm-card-badges');
-          badges.append(element('span', 'fwm-card-badge', '官方'));
-          cover.append(badges);
-          const body = element('div', 'fwm-card-body');
-          body.append(element('span', 'fwm-card-title', item.name));
-          const meta = element('div', 'fwm-card-meta');
-          meta.append(
-            element('span', '', item.categoryId === 'image' ? '图片工作流' : '视频工作流'),
-            element('span', 'fwm-card-meta-separator'),
-            element('span', '', item.output),
-          );
-          body.append(meta);
-          const actions = element('div', 'fwm-card-actions');
-          const add = button(item.configured ? '添加到我的工作流' : '连接并使用', 'primary');
-          add.addEventListener('click', () => {
-            add.disabled = true;
-            add.textContent = '正在添加…';
-            void installOfficialWorkflow(item)
-              .catch((error: unknown) => {
-                setNotice(messageFor(error), 'error');
-                add.disabled = false;
-                add.textContent = item.configured ? '添加到我的工作流' : '连接并使用';
-              });
-          });
-          actions.append(add);
-          body.append(actions);
-          card.append(cover, body);
-          grid.append(card);
+          panel.append(grid);
         }
-        panel.append(grid);
+
+        // ---- 我的推荐 ----
+        const myRecs = readMarketRecs();
+        if (myRecs.length) {
+          panel.append(element('h5', 'fwm-market-section', '我的推荐'));
+          const myGrid = element('div', 'fwm-card-grid');
+          for (const rec of myRecs) {
+            const card = element('article', 'fwm-workflow-card');
+            const cover = element('div', 'fwm-card-cover');
+            const badges = element('div', 'fwm-card-badges');
+            badges.append(element('span', 'fwm-card-badge', '推荐'));
+            cover.append(badges);
+            const body = element('div', 'fwm-card-body');
+            body.append(element('span', 'fwm-card-title', rec.title || rec.webAppId));
+            const meta = element('div', 'fwm-card-meta');
+            meta.append(element('span', '', rec.categoryId === 'image' ? '图片工作流' : '视频工作流'));
+            meta.append(element('span', 'fwm-card-meta-separator'));
+            meta.append(element('span', '', `ID: ${rec.webAppId}`));
+            body.append(meta);
+            const actions = element('div', 'fwm-card-actions');
+            const add = button('添加到我的工作流', 'primary');
+            add.addEventListener('click', () => {
+              add.disabled = true;
+              add.textContent = '正在添加…';
+              void client.createRunningHubWebApp({ webAppId: rec.webAppId, credentialRef: rec.credentialRef || 'runninghub-cn' })
+                .then(async () => {
+                  setNotice(`“${rec.title || rec.webAppId}”已添加到我的工作流`, 'success');
+                  state.definitions = await client.listDefinitions();
+                  await loadDeployedRecords();
+                })
+                .catch((error: unknown) => setNotice(messageFor(error), 'error'))
+                .finally(() => {
+                  add.disabled = false;
+                  add.textContent = '添加到我的工作流';
+                  render();
+                });
+            });
+            const removeRec = button('移除推荐', 'ghost');
+            removeRec.classList.add('is-danger-quiet');
+            removeRec.addEventListener('click', () => {
+              writeMarketRecs(readMarketRecs().filter((r) => r.webAppId !== rec.webAppId));
+              render();
+            });
+            actions.append(removeRec, add);
+            body.append(actions);
+            card.append(cover, body);
+            myGrid.append(card);
+          }
+          panel.append(myGrid);
+        }
       }
       return;
     }

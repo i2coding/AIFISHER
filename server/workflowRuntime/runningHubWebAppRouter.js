@@ -39,6 +39,14 @@ export function createRunningHubWebAppRouter({ service, logger = console }) {
     }
   });
 
+  router.post('/runninghub-webapps/resolve', json, async (request, response) => {
+    try {
+      response.json(await service.resolveWebApp(request.body?.webAppId, request.body?.credentialRef));
+    } catch (error) {
+      sendError(response, error, logger);
+    }
+  });
+
   router.post('/runninghub-webapps', json, async (request, response) => {
     try {
       response.status(201).json(await service.createApp({
