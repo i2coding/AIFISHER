@@ -135,6 +135,8 @@ export function insertClonedCanvasNodes<TNode extends CanvasClipboardNode>(
 ): TNode[] {
   const existingNodes = options.preserveChildConnections
     ? nodes.map((node) => {
+        // 自身已被复制的节点：新副本已经处理好连线，原节点保持不动，避免全选复制时串线。
+        if (idMap.has(node.id)) return node;
         const clonedParents = (node.parentIds ?? [])
           .filter((parentId) => idMap.has(parentId))
           .map((parentId) => idMap.get(parentId)!);

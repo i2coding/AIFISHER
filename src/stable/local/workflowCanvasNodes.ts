@@ -154,42 +154,6 @@ type CanvasNode = Record<string, unknown> & { id: string; type: string };
 type NodePatch = Partial<WorkflowCanvasNodeRecord>;
 
 const WORKFLOW_EXAMPLE_STORAGE_KEY = 'fisherai-workflow-example-bundles-v1';
-const WORKFLOW_EXAMPLE_MAX_BYTES = 512 * 1024;
-const WORKFLOW_EXAMPLE_MAX_NODES = 24;
-const WORKFLOW_EXAMPLE_NODE_TYPES = new Set([
-  'Text',
-  'Image',
-  'Mask',
-  'Video',
-  'Audio',
-  'Upload Image',
-  'Upload Video',
-  'Upload Audio',
-]);
-
-interface WorkflowExampleNodeTemplate {
-  templateId: string;
-  role: 'input' | 'output';
-  type: string;
-  relativeX: number;
-  relativeY: number;
-  outputPortId?: string;
-  data: Record<string, unknown>;
-}
-
-interface WorkflowExampleInputBinding {
-  slotKey: string;
-  templateId: string;
-  sourcePortIndex: number;
-}
-
-interface WorkflowExampleBundle {
-  schemaVersion: 1;
-  definitionId: string;
-  capturedAt: number;
-  nodes: WorkflowExampleNodeTemplate[];
-  inputBindings: WorkflowExampleInputBinding[];
-}
 
 export interface WorkflowCanvasExampleInsertion {
   nodes: CanvasNode[];
@@ -328,90 +292,6 @@ function workflowInputSlotKey(slot: WorkflowCanvasInputSlot): string {
 function safeExampleString(value: unknown, maximum = 200_000): string | undefined {
   if (typeof value !== 'string' || value.length > maximum || /[\0\r]/.test(value)) return undefined;
   return value;
-}
-
-function safeExampleNumber(value: unknown, minimum: number, maximum: number): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function exampleNodeData(node: CanvasNode): Record<string, unknown> {
-  const data: Record<string, unknown> = {};
-  for (const key of [
-    'title',
-    'prompt',
-    'textContent',
-    'resultText',
-    'resultUrl',
-    'url',
-    'filename',
-    'fileName',
-    'mimeType',
-    'aspectRatio',
-    'mediaType',
-    'model',
-    'assetId',
-    'projectId',
-  ]) {
-    const value = safeExampleString(node[key]);
-    const isUrl = key === 'url' || key === 'resultUrl';
-    if (value !== undefined && (!isUrl || !value.startsWith('data:'))) {
-      data[key] = value;
-    }
-  }
-  for (const key of ['width', 'height', 'duration', 'naturalWidth', 'naturalHeight']) {
-    const value = safeExampleNumber(node[key], 0, 100_000);
-    if (value !== undefined) data[key] = value;
-  }
-  if (Array.isArray(node.resultUrls)) {
-    const resultUrls = node.resultUrls
-      .map((value) => safeExampleString(value, 4_096))
-      .filter((value): value is string => typeof value === 'string' && !value.startsWith('data:'))
-      .slice(0, 20);
-    if (resultUrls.length) data.resultUrls = resultUrls;
-  }
-  if (node.type === 'Text') {
-    data.status = 'success';
-  } else if (typeof data.resultUrl === 'string' || typeof data.url === 'string') {
-    data.status = 'success';
-    data.progress = 100;
-  }
-  return data;
-}
-
-function loadWorkflowExampleBundles(): Map<string, WorkflowExampleBundle> {
-  try {
-    const raw = preferenceStorage().getItem(WORKFLOW_EXAMPLE_STORAGE_KEY);
-    if (!raw || raw.length > WORKFLOW_EXAMPLE_MAX_BYTES) return new Map();
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return new Map();
-    return new Map(
-      parsed
-        .filter(
-          (bundle): bundle is WorkflowExampleBundle =>
-            Boolean(bundle) &&
-            typeof bundle === 'object' &&
-            (bundle as WorkflowExampleBundle).schemaVersion === 1 &&
-            typeof (bundle as WorkflowExampleBundle).definitionId === 'string' &&
-            Array.isArray((bundle as WorkflowExampleBundle).nodes) &&
-            Array.isArray((bundle as WorkflowExampleBundle).inputBindings),
-        )
-        .map((bundle) => [bundle.definitionId, bundle]),
-    );
-  } catch {
-    return new Map();
-  }
-}
-
-function saveWorkflowExampleBundles(bundles: ReadonlyMap<string, WorkflowExampleBundle>): boolean {
-  try {
-    const serialized = JSON.stringify([...bundles.values()]);
-    if (new TextEncoder().encode(serialized).byteLength > WORKFLOW_EXAMPLE_MAX_BYTES) return false;
-    preferenceStorage().setItem(WORKFLOW_EXAMPLE_STORAGE_KEY, serialized);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function inputPorts(node: CanvasNode): WorkflowCanvasBlueprint['inputPorts'] {
@@ -1292,7 +1172,12 @@ export function createWorkflowCanvasNodes(
 ): WorkflowCanvasNodesAdapter {
   const observeRun = createWorkflowRunObserver((runId) => client.getRun(runId));
   const reconciliations = new Map<string, Promise<WorkflowCanvasBlueprint | null>>();
-  const exampleBundles = loadWorkflowExampleBundles();
+  // 示例复用已废弃：启动时一次性清掉历史 bundle，新添加的工作流节点永远从空白初始态开始。
+  try {
+    preferenceStorage().removeItem(WORKFLOW_EXAMPLE_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 
   function observe(
     node: WorkflowCanvasNodeRecord,
@@ -1463,182 +1348,43 @@ export function createWorkflowCanvasNodes(
         );
       });
     },
-    captureExample(nodes, workflowNodeId) {
-      const workflowNode = nodes.find(
-        (node): node is CanvasNode & WorkflowCanvasNodeRecord =>
-          node.id === workflowNodeId && node.kind === 'workflow',
-      );
-      const definitionId = workflowNode?.workflowRef?.definitionId;
-      if (!workflowNode || typeof definitionId !== 'string' || !definitionId) return false;
-
-      const templates: WorkflowExampleNodeTemplate[] = [];
-      const templateIdsByNodeId = new Map<string, string>();
-      const parents = Array.isArray(workflowNode.parentIds) ? workflowNode.parentIds : [];
-      const sourcePortIndices = Array.isArray(workflowNode.sourcePortIndices)
-        ? workflowNode.sourcePortIndices
-        : [];
-      const byId = new Map(nodes.map((node) => [node.id, node]));
-      const slots = expandWorkflowStorageSlots(workflowNode);
-      const inputBindings: WorkflowExampleInputBinding[] = [];
-
-      for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
-        const parentId = parents[slotIndex];
-        const parent = parentId ? byId.get(parentId) : undefined;
-        if (!parent || !WORKFLOW_EXAMPLE_NODE_TYPES.has(parent.type)) continue;
-        let templateId = templateIdsByNodeId.get(parent.id);
-        if (!templateId) {
-          if (templates.length >= WORKFLOW_EXAMPLE_MAX_NODES) break;
-          templateId = `input-${templates.filter((item) => item.role === 'input').length}`;
-          templateIdsByNodeId.set(parent.id, templateId);
-          templates.push({
-            templateId,
-            role: 'input',
-            type: parent.type,
-            relativeX: finiteNumber(parent.x, 0, -20_000, 20_000) - workflowNode.x,
-            relativeY: finiteNumber(parent.y, 0, -20_000, 20_000) - workflowNode.y,
-            data: exampleNodeData(parent),
-          });
-        }
-        inputBindings.push({
-          slotKey: workflowInputSlotKey(slots[slotIndex]),
-          templateId,
-          sourcePortIndex: Math.max(0, Math.trunc(Number(sourcePortIndices[slotIndex]) || 0)),
-        });
-      }
-
-      for (const child of nodes) {
-        if (templates.length >= WORKFLOW_EXAMPLE_MAX_NODES) break;
-        if (
-          !WORKFLOW_EXAMPLE_NODE_TYPES.has(child.type) ||
-          !Array.isArray(child.parentIds) ||
-          !child.parentIds.includes(workflowNode.id) ||
-          typeof child.workflowSourcePortId !== 'string'
-        ) {
-          continue;
-        }
-        templates.push({
-          templateId: `output-${templates.filter((item) => item.role === 'output').length}`,
-          role: 'output',
-          type: child.type,
-          relativeX: finiteNumber(child.x, 0, -20_000, 20_000) - workflowNode.x,
-          relativeY: finiteNumber(child.y, 0, -20_000, 20_000) - workflowNode.y,
-          outputPortId: child.workflowSourcePortId,
-          data: exampleNodeData(child),
-        });
-      }
-
-      if (templates.length === 0) return false;
-      const bundle: WorkflowExampleBundle = {
-        schemaVersion: 1,
-        definitionId,
-        capturedAt: Date.now(),
-        nodes: templates,
-        inputBindings,
-      };
-      const previous = exampleBundles.get(definitionId);
-      exampleBundles.set(definitionId, bundle);
-      if (!saveWorkflowExampleBundles(exampleBundles)) {
-        if (previous) exampleBundles.set(definitionId, previous);
-        else exampleBundles.delete(definitionId);
-        return false;
-      }
-      return true;
+    captureExample(_nodes, _workflowNodeId) {
+      // 示例复用已废弃：不再把当前输入图/输出图打包进 localStorage，
+      // 需要带图带连线的副本请直接在画布上复制节点。
+      return false;
     },
-    hasExample(definitionId) {
-      return exampleBundles.has(definitionId);
+    hasExample(_definitionId) {
+      // 示例复用已废弃：永远没有可恢复的示例。
+      return false;
     },
     instantiateExample(blueprint, position = {}, sourceNodes = []) {
-      const bundle = exampleBundles.get(blueprint.workflowRef.definitionId);
+      // 示例复用已废弃：添加工作流节点永远从空白初始态开始，
+      // 需要带图带连线的副本请直接在画布上复制节点。
       const anchorX = finiteNumber(position.x, 160, -1_000_000, 1_000_000);
       const anchorY = finiteNumber(position.y, 140, -1_000_000, 1_000_000);
-      if (!bundle || bundle.nodes.length === 0) {
-        const node = adapter.createNode(blueprint, { x: anchorX, y: anchorY });
-        const availableSources = [...sourceNodes]
-          .filter((source) => source.id !== node.id && Boolean(mediaKindForNode(source)))
-          .sort(
-            (left, right) =>
-              finiteNumber(left.y, 0, -1_000_000, 1_000_000) -
-                finiteNumber(right.y, 0, -1_000_000, 1_000_000) ||
-              finiteNumber(left.x, 0, -1_000_000, 1_000_000) -
-                finiteNumber(right.x, 0, -1_000_000, 1_000_000),
-          );
-        const usedSourceIds = new Set<string>();
-        for (const slot of expandWorkflowStorageSlots(node)) {
-          const source = availableSources.find(
-            (candidate) =>
-              !usedSourceIds.has(candidate.id) &&
-              mediaKindsCompatible(mediaKindForNode(candidate), slot.mediaKind),
-          );
-          if (!source) continue;
-          node.parentIds[slot.slotIndex] = source.id;
-          node.sourcePortIndices[slot.slotIndex] = 0;
-          usedSourceIds.add(source.id);
-        }
-        return { nodes: [node], selectedNodeIds: [node.id], restoredExample: false };
+      const node = adapter.createNode(blueprint, { x: anchorX, y: anchorY });
+      const availableSources = [...sourceNodes]
+        .filter((source) => source.id !== node.id && Boolean(mediaKindForNode(source)))
+        .sort(
+          (left, right) =>
+            finiteNumber(left.y, 0, -1_000_000, 1_000_000) -
+              finiteNumber(right.y, 0, -1_000_000, 1_000_000) ||
+            finiteNumber(left.x, 0, -1_000_000, 1_000_000) -
+              finiteNumber(right.x, 0, -1_000_000, 1_000_000),
+        );
+      const usedSourceIds = new Set<string>();
+      for (const slot of expandWorkflowStorageSlots(node)) {
+        const source = availableSources.find(
+          (candidate) =>
+            !usedSourceIds.has(candidate.id) &&
+            mediaKindsCompatible(mediaKindForNode(candidate), slot.mediaKind),
+        );
+        if (!source) continue;
+        node.parentIds[slot.slotIndex] = source.id;
+        node.sourcePortIndices[slot.slotIndex] = 0;
+        usedSourceIds.add(source.id);
       }
-
-      const minimumX = Math.min(0, ...bundle.nodes.map((node) => node.relativeX));
-      const minimumY = Math.min(0, ...bundle.nodes.map((node) => node.relativeY));
-      const workflowNode = adapter.createNode(blueprint, {
-        x: anchorX - minimumX,
-        y: anchorY - minimumY,
-      });
-      const idsByTemplateId = new Map(
-        bundle.nodes.map((template) => [template.templateId, crypto.randomUUID()]),
-      );
-      const inputNodes = bundle.nodes
-        .filter((template) => template.role === 'input')
-        .map((template) => ({
-          ...structuredClone(template.data),
-          id: idsByTemplateId.get(template.templateId)!,
-          type: template.type,
-          x: workflowNode.x + template.relativeX,
-          y: workflowNode.y + template.relativeY,
-          parentIds: [],
-          sourcePortIndices: [],
-        })) as CanvasNode[];
-      const bindingBySlotKey = new Map(
-        bundle.inputBindings.map((binding) => [binding.slotKey, binding]),
-      );
-      const freshSlots = expandWorkflowStorageSlots(workflowNode);
-      workflowNode.parentIds = freshSlots.map((slot) => {
-        const binding = bindingBySlotKey.get(workflowInputSlotKey(slot));
-        return binding ? idsByTemplateId.get(binding.templateId) || '' : '';
-      });
-      workflowNode.sourcePortIndices = freshSlots.map((slot) => {
-        const binding = bindingBySlotKey.get(workflowInputSlotKey(slot));
-        return binding?.sourcePortIndex || 0;
-      });
-
-      const freshOutputPorts = new Map(
-        workflowNode.outputPorts.map((port, index) => [port.id, index]),
-      );
-      const outputNodes = bundle.nodes
-        .filter((template) => template.role === 'output')
-        .flatMap((template) => {
-          const portIndex = template.outputPortId
-            ? freshOutputPorts.get(template.outputPortId)
-            : undefined;
-          if (portIndex === undefined) return [];
-          return [
-            {
-              ...structuredClone(template.data),
-              id: idsByTemplateId.get(template.templateId)!,
-              type: template.type,
-              x: workflowNode.x + template.relativeX,
-              y: workflowNode.y + template.relativeY,
-              parentIds: [workflowNode.id],
-              sourcePortIndices: [portIndex],
-              workflowSourcePortId: template.outputPortId,
-            } as CanvasNode,
-          ];
-        });
-      const restoredNodes: CanvasNode[] = [...inputNodes, workflowNode, ...outputNodes];
-      return {
-        nodes: restoredNodes,
-        selectedNodeIds: restoredNodes.map((node) => node.id),
-        restoredExample: true,
-      };
+      return { nodes: [node], selectedNodeIds: [node.id], restoredExample: false };
     },
     instantiateVerifiedRun(blueprint, verified, position = {}) {
       if (verified.run.status !== 'success' || !verified.run.receipt) {
