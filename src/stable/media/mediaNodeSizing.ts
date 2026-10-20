@@ -74,9 +74,21 @@ export function adaptiveMediaNodeSize(
   node: AdaptiveMediaNode,
 ): { width: number; height: number } | undefined {
   if (!ADAPTIVE_MEDIA_TYPES.has(String(node.type || ''))) return undefined;
+  const type = String(node.type || '');
+  const storedWidth = positiveNumber(node.width);
+  const storedHeight = positiveNumber(node.height);
+
+  // 音频节点支持自由拉伸（RunningHub 式）：用户拖拽 resize 后尊重手动宽高，
+  // 不再强制按比例锁定高度。
+  if (type === 'Audio' || type === 'Upload Audio') {
+    return {
+      width: Math.min(4_096, Math.max(112, storedWidth ?? 365)),
+      height: Math.min(4_096, Math.max(80, storedHeight ?? 112)),
+    };
+  }
+
   const ratio = mediaAspectRatio(node);
   if (!ratio) return undefined;
-  const storedWidth = positiveNumber(node.width);
   const width = Math.min(4_096, Math.max(112, storedWidth ?? (ratio >= 1 ? 252 * ratio : 252)));
   return {
     width,

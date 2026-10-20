@@ -3,7 +3,7 @@ import { createAudioWaveform, type AudioWaveform, type AudioRange } from './audi
 
 type Runtime = Pick<
   typeof ReactTypes,
-  'createElement' | 'Fragment' | 'useState' | 'useRef' | 'useEffect'
+  'createElement' | 'Fragment' | 'useState' | 'useRef' | 'useEffect' | 'useCallback'
 >;
 type Icon = ReactTypes.ComponentType<{
   size?: number;
@@ -38,61 +38,39 @@ interface Components {
   }>;
   createWaveform?: typeof createAudioWaveform;
 }
-function formatAudioTime(seconds: number) {
-  const ms = Math.floor(Math.max(0, Number.isFinite(seconds) ? seconds : 0) * 1000);
-  const hours = Math.floor(ms / 3600000);
-  return (
-    (hours ? String(hours).padStart(2, '0') + ':' : '') +
-    String(Math.floor(ms / 60000) % 60).padStart(2, '0') +
-    ':' +
-    String(Math.floor(ms / 1000) % 60).padStart(2, '0') +
-    '.' +
-    String(ms % 1000).padStart(3, '0')
-  );
-}
+
 export function CanvasAudioPlayer(
   React: Runtime,
   { data, selected, onAudioTrim }: Props,
   {
-    PlayIcon,
-    PauseIcon,
-    TrimIcon,
-    ConfirmIcon,
     Spinner,
     AudioIcon,
-    Tooltip,
+    ConfirmIcon,
     createWaveform = createAudioWaveform,
   }: Components,
 ) {
-  const root = React.useRef<HTMLDivElement>(null),
-    container = React.useRef<HTMLDivElement>(null);
-  const player = React.useRef<AudioWaveform | null>(null),
-    owner = React.useRef<object | null>(null);
+  const root = React.useRef<HTMLDivElement>(null);
+  const container = React.useRef<HTMLDivElement>(null);
+  const player = React.useRef<AudioWaveform | null>(null);
+  const owner = React.useRef<object | null>(null);
   const trimPending = React.useRef(false);
-  const [ready, setReady] = React.useState(false),
-    [playing, setPlaying] = React.useState(false);
-  const [editing, setEditing] = React.useState(false),
-    [trimming, setTrimming] = React.useState(false);
-  const [range, setRange] = React.useState<AudioRange | null>(null),
-    [time, setTime] = React.useState(0);
-  const [duration, setDuration] = React.useState(0),
-    [error, setError] = React.useState('');
-  const [loadFailed, setLoadFailed] = React.useState(false),
-    [attempt, setAttempt] = React.useState(0);
+
+  const [ready, setReady] = React.useState(false);
+  const [range, setRange] = React.useState<AudioRange | null>(null);
+  const [error, setError] = React.useState('');
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [rangeChanged, setRangeChanged] = React.useState(false);
+
   React.useEffect(() => {
     const token = {};
     owner.current = token;
     setReady(false);
-    setPlaying(false);
-    setEditing(false);
-    setTrimming(false);
     setRange(null);
-    setTime(0);
-    setDuration(0);
     setError('');
     setLoadFailed(false);
     setSaving(false);
+    setRangeChanged(false);
     trimPending.current = false;
     let instance: AudioWaveform | undefined;
     let failed = false;
@@ -103,7 +81,6 @@ export function CanvasAudioPlayer(
       failed = true;
       clearTimeout(timeout);
       setReady(false);
-      setPlaying(false);
       setLoadFailed(true);
       setError('音频加载失败，请重试');
       instance?.destroy();
@@ -113,21 +90,19 @@ export function CanvasAudioPlayer(
       timeout = setTimeout(fail, 30000);
       try {
         instance = createWaveform(container.current, data.resultUrl, {
-          ready(value) {
+          ready() {
             if (active()) {
               clearTimeout(timeout);
-              setDuration(value);
               setReady(true);
             }
           },
-          time(value) {
-            if (active()) setTime(value);
-          },
-          playing(value) {
-            if (active()) setPlaying(value);
-          },
+          time() {},
+          playing() {},
           range(value) {
-            if (active()) setRange(value);
+            if (active()) {
+              setRange(value);
+              setRangeChanged(true);
+            }
           },
           error: fail,
         });
@@ -143,10 +118,8 @@ export function CanvasAudioPlayer(
       instance?.destroy();
       player.current = null;
     };
-  }, [data.id, data.projectId, data.resultUrl, attempt, createWaveform]);
-  React.useEffect(() => {
-    if (ready) player.current?.setEditing(editing, trimming);
-  }, [ready, editing, trimming]);
+  }, [data.id, data.projectId, data.resultUrl, createWaveform]);
+
   React.useEffect(() => {
     const visibility = () => {
       if (document.hidden) player.current?.pause();
@@ -154,31 +127,10 @@ export function CanvasAudioPlayer(
     document.addEventListener('visibilitychange', visibility);
     return () => document.removeEventListener('visibilitychange', visibility);
   }, []);
-  React.useEffect(() => {
-    if (!editing) return;
-    const outside = (event: MouseEvent) => {
-      if (!trimPending.current && !root.current?.contains(event.target as Node)) {
-        setEditing(false);
-        setTrimming(false);
-      }
-    };
-    document.addEventListener('mousedown', outside);
-    return () => document.removeEventListener('mousedown', outside);
-  }, [editing]);
-  const play = async (event: ReactTypes.SyntheticEvent) => {
-    event.stopPropagation();
-    const token = owner.current;
-    setError('');
-    try {
-      await player.current?.playPause();
-    } catch {
-      if (owner.current === token) setError('无法播放音频，请再次点击播放');
-    }
-  };
+
   const trim = async (event: ReactTypes.SyntheticEvent) => {
     event.stopPropagation();
-    if (!range || !onAudioTrim || trimPending.current || !canTrim || !(range.end > range.start))
-      return;
+    if (!range || !onAudioTrim || trimPending.current || !(range.end > range.start)) return;
     const token = owner.current;
     trimPending.current = true;
     setSaving(true);
@@ -187,13 +139,10 @@ export function CanvasAudioPlayer(
     try {
       const result = await onAudioTrim(data.id, range.start, range.end);
       if (owner.current !== token) return;
-      if (result === false) setError('裁切未完成，已保留选区，请重试');
-      else {
-        setTrimming(false);
-        setEditing(false);
-      }
+      if (result === false) setError('裁切未完成，请重试');
+      else setRangeChanged(false);
     } catch {
-      if (owner.current === token) setError('裁切失败，已保留选区，请重试');
+      if (owner.current === token) setError('裁切失败，请重试');
     } finally {
       if (owner.current === token) {
         trimPending.current = false;
@@ -201,131 +150,96 @@ export function CanvasAudioPlayer(
       }
     }
   };
+
   const loading = data.status === 'loading';
   const canTrim =
     !loading && !data.uploadPending && !!data.resultUrl && !/^(blob|data):/i.test(data.resultUrl);
+
+  // 右键菜单：保存音频
+  const onContextMenu = (event: ReactTypes.SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!data.resultUrl) return;
+    const a = document.createElement('a');
+    a.href = data.resultUrl;
+    a.download = `audio-${data.id}.mp3`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   return (
     <div
       ref={root}
       data-fisherai-audio-player={data.id}
-      className="w-full h-full rounded-lg overflow-hidden relative"
+      className="w-full h-full rounded-lg overflow-hidden relative bg-black"
+      onContextMenu={onContextMenu}
     >
-      <style>
-        {
-          '[data-fisherai-audio-player] ::part(region-handle){display:none!important}[data-fisherai-audio-player] ::part(region){border:0!important;box-shadow:none!important;outline:none!important}'
-        }
-      </style>
       {data.resultUrl ? (
-        <div className="relative w-full h-full bg-[var(--af-surface)] text-[var(--af-text)] group/audio flex flex-col">
-          <div
-            style={{ pointerEvents: saving ? 'none' : undefined }}
-            className={`flex-1 min-h-0 flex items-center px-4 pt-0 transition-colors ${trimming ? 'bg-blue-500/5 cursor-crosshair' : editing ? 'cursor-pointer' : 'cursor-grab'}`}
-            onPointerDown={(event) => {
-              if (editing) event.stopPropagation();
-            }}
-            onDoubleClick={(event) => {
-              event.stopPropagation();
-              if (!saving) setEditing(true);
-            }}
-          >
-            <div ref={container} className="w-full" aria-label="音频波形" />
-          </div>
-          {ready && (
-            <div className="h-8 px-3 grid grid-cols-[1fr_auto_1fr] items-center bg-[var(--af-surface-raised)] border-t border-[var(--af-border)]">
-              <div className="justify-self-start text-[10px] text-[var(--af-text-secondary)] font-mono tabular-nums">
-                {formatAudioTime(time)} / {formatAudioTime(duration)}
-              </div>
-              <div className="justify-self-center flex items-center gap-2">
-                <Tooltip text={playing ? '暂停' : '播放'} position="top">
-                  <button
-                    aria-label={playing ? '暂停音频' : '播放音频'}
-                    onClick={play}
-                    className="flex items-center justify-center w-5 h-5 rounded-full bg-[var(--af-primary)] hover:opacity-90 text-[var(--af-on-primary)] transition-all duration-200 active:scale-95"
-                  >
-                    {playing ? (
-                      <PauseIcon size={10} fill="currentColor" />
-                    ) : (
-                      <PlayIcon size={10} fill="currentColor" className="ml-0.5" />
-                    )}
-                  </button>
-                </Tooltip>
-                <Tooltip text={trimming ? '取消裁切' : '进入裁切'} position="top">
-                  <button
-                    aria-label={trimming ? '取消裁切' : '进入裁切'}
-                    disabled={saving || !onAudioTrim || !canTrim}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (saving || !canTrim) return;
-                      setEditing(true);
-                      setTrimming(!trimming);
-                      setError('');
-                    }}
-                    className={`flex items-center justify-center w-5 h-5 rounded-full transition-all duration-200 active:scale-95 ${trimming ? 'bg-[var(--af-selected)] text-[var(--af-on-selected)]' : 'bg-[var(--af-surface-raised)] hover:bg-[var(--af-hover)] text-[var(--af-text-secondary)] hover:text-[var(--af-text)]'}`}
-                  >
-                    <TrimIcon size={10} />
-                  </button>
-                </Tooltip>
-              </div>
-              <div className="justify-self-end flex items-center gap-2">
-                {trimming && (
-                  <Tooltip text={range ? '确认裁切' : '请先框选范围'} position="top">
-                    <button
-                      aria-label="确认裁切"
-                      onClick={trim}
-                      disabled={!range || saving || !canTrim || !(range.end > range.start)}
-                      className={`flex items-center justify-center w-5 h-5 rounded-full transition-all duration-200 ${range ? 'bg-[var(--af-primary)] text-[var(--af-on-primary)] hover:opacity-90 active:scale-95 shadow-lg' : 'bg-[var(--af-surface-raised)] text-[var(--af-text-muted)] cursor-not-allowed opacity-70'}`}
-                    >
-                      {saving ? (
-                        <Spinner size={10} className="animate-spin" />
-                      ) : (
-                        <ConfirmIcon size={10} strokeWidth={3} />
-                      )}
-                    </button>
-                  </Tooltip>
+        <>
+          <div ref={container} className="absolute inset-0" aria-label="音频波形" />
+          {/* 裁切确认按钮 */}
+          {ready && rangeChanged && canTrim && onAudioTrim && (
+            <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5">
+              <button
+                aria-label="应用裁切"
+                onClick={trim}
+                disabled={saving || !range || !(range.end > range.start)}
+                className={`flex items-center gap-1 px-2.5 h-7 rounded-md text-xs font-medium transition-all shadow-lg ${
+                  saving || !range || !(range.end > range.start)
+                    ? 'bg-zinc-700 text-zinc-400 cursor-not-allowed'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-500 active:scale-95'
+                }`}
+              >
+                {saving ? (
+                  <Spinner size={12} className="animate-spin" />
+                ) : (
+                  <ConfirmIcon size={12} strokeWidth={3} />
                 )}
-              </div>
+                {saving ? '裁切中' : '应用裁切'}
+              </button>
             </div>
           )}
           {error && (
             <div
               role="alert"
-              className="text-[var(--af-danger)] bg-[var(--af-danger-bg)] text-xs px-3 py-1"
+              className="absolute bottom-0 left-0 right-0 text-xs px-3 py-1.5 bg-red-900/90 text-red-100 z-20 flex items-center justify-between gap-2"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              {error}
-              {loadFailed && (
-                <button
-                  className="ml-2 underline"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setAttempt((value) => value + 1);
-                  }}
-                >
-                  重试加载
-                </button>
-              )}
+              <span className="truncate">{error}</span>
+              <button
+                aria-label="关闭错误提示"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setError('');
+                }}
+                className="shrink-0 w-4 h-4 flex items-center justify-center rounded hover:bg-red-700 text-red-200"
+              >
+                ×
+              </button>
             </div>
           )}
-          {((!ready && !loadFailed) || loading) && (
+          {(!ready && !loadFailed) && (
             <div
-              className="absolute inset-0 bg-[var(--af-surface)] opacity-80 flex items-center justify-center"
-              style={{ pointerEvents: 'none' }}
+              className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center"
             >
-              <Spinner size={24} className="animate-spin text-[var(--af-info)]" />
+              <Spinner size={24} className="animate-spin text-zinc-500" />
             </div>
           )}
-        </div>
+        </>
       ) : (
         <div
-          className={`relative w-full h-full bg-[var(--af-surface)] flex flex-col items-center justify-center gap-3 rounded-lg ${selected ? 'border border-dashed border-[var(--af-border-control)]' : ''}`}
+          className={`relative w-full h-full bg-black flex flex-col items-center justify-center gap-2 rounded-lg ${
+            selected ? 'border border-dashed border-zinc-600' : ''
+          }`}
         >
           {loading ? (
-            <Spinner size={24} className="animate-spin text-[var(--af-info)]" />
+            <Spinner size={24} className="animate-spin text-zinc-500" />
           ) : (
             <>
-              <AudioIcon size={32} className="text-[var(--af-text-muted)]" />
+              <AudioIcon size={32} className="text-zinc-600" />
               {(data.type === 'Upload Audio' || data.type === 'upload-audio') && (
-                <span className="text-[10px] font-medium text-[var(--af-text-secondary)]">
+                <span className="text-[10px] font-medium text-zinc-500">
                   选择音频文件
                 </span>
               )}

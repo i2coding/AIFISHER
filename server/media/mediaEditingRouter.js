@@ -17,6 +17,8 @@ class MediaEditingError extends Error {
 }
 
 const bundledFfmpegPath = path.join(RUNTIME_PATHS.BIN_DIR, 'ffmpeg.exe');
+// 开发环境：打包目录没有 ffmpeg.exe 时回退到系统 PATH
+const ffmpegPath = fs.existsSync(bundledFfmpegPath) ? bundledFfmpegPath : 'ffmpeg';
 
 function assertSafeSegment(value, label) {
   if (
@@ -186,7 +188,7 @@ async function defaultFfmpegRunner(job) {
           '-c:a', 'aac', '-movflags', '+faststart', job.outputPath,
         ];
   await new Promise((resolve, reject) => {
-    const child = spawn(bundledFfmpegPath, args, {
+    const child = spawn(ffmpegPath, args, {
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
