@@ -802,6 +802,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
             overflow: 'hidden',
           }}
         >
+          {!cloud && (
           <header
             style={{
               height: '64px',
@@ -811,7 +812,7 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
               gap: '11px',
               padding: '0 16px',
               borderBottom: '1px solid var(--af-border)',
-              background: cloud ? 'var(--af-info-bg)' : 'var(--af-surface)',
+              background: 'var(--af-surface)',
             }}
           >
             <img src={'/aifisher-mark-white.svg'} alt={''} width={26} height={26} />
@@ -871,11 +872,12 @@ export function CanvasWorkflowGenerator(React: Runtime, props: Props, Frame: Can
                       : '就绪'}
             </span>
           </header>
+          )}
           {!settings || cloud ? (
             <section
               data-fisherai-workflow-prompt={'true'}
               style={{
-                height: cloud ? '166px' : 'auto',
+                height: cloud ? '220px' : 'auto',
                 flex: cloud ? 'none' : '1 1 auto',
                 minHeight: 0,
                 overflow: 'auto',
