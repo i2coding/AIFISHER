@@ -19,7 +19,7 @@ export const RUNNINGHUB_ACCESS_DEFAULTS: RunningHubAccessSettings = {
   totalTimeoutMs: 30 * 60_000,
   baseIntervalMs: 15_000,
   jitterMs: 5_000,
-  retryMaxAttempts: 3,
+  retryMaxAttempts: 10,
   upscaleTargetSize: 2048,
 };
 

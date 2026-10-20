@@ -182,7 +182,7 @@ export function CanvasNodeFrame(
           <div
             data-fisherai-media-resize-handle="true"
             aria-label="缩放媒体节点"
-            className="absolute -bottom-6 -right-6 w-14 h-14 cursor-nwse-resize flex items-center justify-center group/resize"
+            className="absolute -bottom-5 -right-5 w-9 h-9 cursor-nwse-resize flex items-center justify-center group/resize opacity-50 hover:opacity-100 transition-opacity"
             style={{ zIndex: 40 }}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
@@ -191,16 +191,16 @@ export function CanvasNodeFrame(
             }}
           >
             <svg
-              width="32"
-              height="32"
+              width="18"
+              height="18"
               viewBox="0 0 32 32"
               fill="none"
-              className="text-[var(--af-text-muted)] group-hover/resize:text-[var(--af-info)] transition-all duration-300 drop-shadow-[0_0_5px_rgba(0,0,0,0.6)]"
+              className="text-[var(--af-text-muted)] group-hover/resize:text-[var(--af-info)] transition-all duration-200 drop-shadow-[0_0_4px_rgba(0,0,0,0.6)]"
             >
               <path
                 d="M 12 28 C 22 28 28 22 28 12"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="2.5"
                 strokeLinecap="round"
               />
             </svg>
