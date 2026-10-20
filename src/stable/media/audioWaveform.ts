@@ -98,7 +98,7 @@ export function createAudioWaveform(
   let dragStartY = 0;
   let dragStartStartTime = 0;
   let dragStartEndTime = 0;
-  let dragStartVolY = 0;
+  let dragStartVolume = 1;
   let dragMoved = false;
   const DRAG_THRESHOLD = 5;
 
@@ -121,6 +121,7 @@ export function createAudioWaveform(
   // 按钮命中区域（canvas 坐标）
   let loopBtnRect: { x: number; y: number; w: number; h: number } | null = null;
   let modeBtnRect: { x: number; y: number; w: number; h: number } | null = null;
+  let volBtnRect: { x: number; y: number; w: number; h: number } | null = null;
 
   // ── 工具：坐标换算 ──
   function getCanvasSize() {
@@ -163,33 +164,6 @@ export function createAudioWaveform(
       return startTime + ratio * cropDur;
     }
     return Math.max(0, Math.min(duration, (px / usableW) * duration));
-  }
-
-  function getVolumeY(_y: number, h: number): number {
-    const barPadY = 2;
-    const waveH = h - barPadY * 2;
-    const v = Math.max(0, Math.min(3.0, volume));
-    let yRatio: number;
-    if (v <= 1.0) {
-      yRatio = 1.0 - v * 0.5;
-    } else {
-      const t = (v - 1.0) / 2.0;
-      yRatio = 0.5 - t * 0.5;
-    }
-    return barPadY + waveH * yRatio;
-  }
-
-  function getVolumeFromY(y: number, h: number): number {
-    const barPadY = 2;
-    const waveH = h - barPadY * 2;
-    const yRatio = Math.max(0, Math.min(1, (y - barPadY) / waveH));
-    if (yRatio >= 0.5) {
-      const t = (1.0 - yRatio) / 0.5;
-      return Math.max(0, Math.min(1.0, t));
-    } else {
-      const t = (0.5 - yRatio) / 0.5;
-      return Math.max(1.0, Math.min(3.0, 1.0 + t * 2.0));
-    }
   }
 
   // ── Web Audio 初始化 ──
@@ -339,22 +313,6 @@ export function createAudioWaveform(
       ctx.fillRect(endX, waveTop + barPadY, w - pad - endX, waveH);
     }
 
-    // 音量线（左侧可拖拽手柄）
-    const volY = getVolumeY(0, h) + waveTop;
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(pad, volY);
-    ctx.lineTo(pad + 50, volY);
-    ctx.stroke();
-    // 右端小圆点手柄
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(pad + 50, volY, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineCap = 'butt';
-
     // 标记线
     if (duration > 0) {
       // 起点红线
@@ -435,14 +393,15 @@ export function createAudioWaveform(
 
   function drawTopBar(ctx: CanvasRenderingContext2D, w: number, _h: number) {
     const pad = getPad();
-    // 音量文字
+    // 音量文字（可左右拖拽调节）
     const volText = `音量${Math.round(volume * 100)}`;
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillStyle = isDragging && dragType === 'volume' ? '#FFD700' : 'rgba(255,255,255,0.8)';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(volText, pad + 2, 3);
     const volTextW = ctx.measureText(volText).width;
+    volBtnRect = { x: pad + 2, y: 1, w: volTextW + 4, h: 18 };
 
     // 时间码
     const curTime = formatTime(playbackTime || startTime);
@@ -637,9 +596,21 @@ export function createAudioWaveform(
     if (e.button === 2) return; // 右键由 React 层处理
 
     const { x, y } = getLocalPos(e);
-    const { h } = getCanvasSize();
     const topBarH = 20;
 
+    // 命中音量文字（左右拖拽调节）
+    if (volBtnRect && y < topBarH && x >= volBtnRect.x && x <= volBtnRect.x + volBtnRect.w) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragType = 'volume';
+      isDragging = true;
+      dragMoved = false;
+      dragStartX = e.clientX;
+      dragStartVolume = volume;
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      return;
+    }
     // 命中循环按钮
     if (loopBtnRect && y < topBarH && x >= loopBtnRect.x && x <= loopBtnRect.x + loopBtnRect.w) {
       e.preventDefault();
@@ -657,20 +628,16 @@ export function createAudioWaveform(
 
     if (y < topBarH) return; // 顶部信息栏区域其他位置不响应
 
-    const pad = getPad();
-    const waveTop = topBarH;
-    const volY = getVolumeY(0, h) + waveTop;
     const startX = timeToX(startTime);
     const endX = timeToX(endTime);
     const playX = timeToX(playbackTime);
 
-    // 判断是否命中交互手柄（红蓝线/播放头/音量线）
-    const hitVolume = Math.abs(y - volY) <= 12 && x >= pad - 4 && x <= pad + 60;
+    // 判断是否命中交互手柄（红蓝线/播放头）
     const hitStart = Math.abs(x - startX) <= 18;
     const hitEnd = Math.abs(x - endX) <= 18;
     const hitPlayhead = Math.abs(x - playX) <= 20;
 
-    if (!hitVolume && !hitStart && !hitEnd && !hitPlayhead) {
+    if (!hitStart && !hitEnd && !hitPlayhead) {
       // 空白处：播放/暂停，不阻止冒泡（让节点能被选中/拖动）
       togglePlay();
       return;
@@ -680,9 +647,7 @@ export function createAudioWaveform(
     e.preventDefault();
     e.stopPropagation();
 
-    if (hitVolume) {
-      dragType = 'volume';
-    } else if (hitStart && (!hitEnd || Math.abs(x - startX) <= Math.abs(x - endX))) {
+    if (hitStart && (!hitEnd || Math.abs(x - startX) <= Math.abs(x - endX))) {
       dragType = 'start';
     } else if (hitEnd) {
       dragType = 'end';
@@ -696,7 +661,6 @@ export function createAudioWaveform(
     dragStartY = e.clientY;
     dragStartStartTime = startTime;
     dragStartEndTime = endTime;
-    dragStartVolY = volY;
 
     if (dragType === 'playhead') {
       let t = xToTime(x);
@@ -712,7 +676,6 @@ export function createAudioWaveform(
 
   function onPointerMove(e: PointerEvent) {
     if (disposed || !isDragging) return;
-    const { h } = getCanvasSize();
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
 
@@ -725,11 +688,10 @@ export function createAudioWaveform(
     }
 
     if (dragType === 'volume') {
-      const currentY = dragStartVolY + dy;
-      let v = getVolumeFromY(currentY - 20, h); // 减去 topBar 偏移
-      v = Math.round(v * 100) / 100;
-      volume = v;
-      applyVolume(v);
+      // 左右拖拽：每 50px 变化 100% 音量
+      const v = Math.max(0, Math.min(3, dragStartVolume + dx / 50));
+      volume = Math.round(v * 100) / 100;
+      applyVolume(volume);
       scheduleRender();
       return;
     }
