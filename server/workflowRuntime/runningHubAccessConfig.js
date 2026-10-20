@@ -13,10 +13,14 @@ export const RUNNINGHUB_ACCESS_DEFAULTS = Object.freeze({
   totalTimeoutMs: 30 * 60_000,
   // 基础轮询间隔：默认 15 秒。
   baseIntervalMs: 15_000,
-  // 随机抖动范围 ±：默认 ±5 秒。查询间隔 = 基础间隔 ± 抖动内的随机值。
+  // 随机抖动范围 ±：默认 ±5 秒。
   jitterMs: 5_000,
-  // 查询失败（网络类可重试错误）的连续重试次数：默认 3。超出即抛错，不再无限续轮。
+  // 查询失败（网络类可重试错误）的连续重试次数：默认 3。
   retryMaxAttempts: 3,
+  // 最大并发任务数：默认 1。
+  maxConcurrent: 1,
+  // 等待队列长度：-1 = 无界，0 = 不排队，N = 最多 N 个排队。
+  maxQueueLength: -1,
 });
 
 export const RUNNINGHUB_ACCESS_KEYS = Object.freeze({
@@ -24,6 +28,8 @@ export const RUNNINGHUB_ACCESS_KEYS = Object.freeze({
   baseIntervalMs: `${KEY_PREFIX}baseIntervalMs`,
   jitterMs: `${KEY_PREFIX}jitterMs`,
   retryMaxAttempts: `${KEY_PREFIX}retryMaxAttempts`,
+  maxConcurrent: `${KEY_PREFIX}maxConcurrent`,
+  maxQueueLength: `${KEY_PREFIX}maxQueueLength`,
 });
 
 function clamp(value, minimum, maximum) {
@@ -63,13 +69,27 @@ export function parseRunningHubAccessConfig(values = {}) {
         result.retryMaxAttempts,
       );
     }
+    if (typeof values[RUNNINGHUB_ACCESS_KEYS.maxConcurrent] === 'string') {
+      result.maxConcurrent = toNonNegativeInteger(
+        values[RUNNINGHUB_ACCESS_KEYS.maxConcurrent],
+        result.maxConcurrent,
+      );
+    }
+    if (typeof values[RUNNINGHUB_ACCESS_KEYS.maxQueueLength] === 'string') {
+      const parsed = Number(values[RUNNINGHUB_ACCESS_KEYS.maxQueueLength]);
+      if (Number.isFinite(parsed)) result.maxQueueLength = Math.round(parsed);
+    }
   }
-  // 夹取合法范围：总体超时与部署校验一致（10 秒 ~ 2 小时）；
-  // 抖动不超过基础间隔，避免查询间隔被压到技术下限；重试次数有界。
+  // 夹取合法范围
   result.totalTimeoutMs = clamp(result.totalTimeoutMs, 10_000, 7_200_000);
   result.baseIntervalMs = clamp(result.baseIntervalMs, 100, 600_000);
   result.jitterMs = clamp(result.jitterMs, 0, result.baseIntervalMs);
   result.retryMaxAttempts = clamp(result.retryMaxAttempts, 0, 20);
+  result.maxConcurrent = clamp(result.maxConcurrent, 1, 10);
+  // maxQueueLength: -1 = 无界，否则 0~100
+  if (result.maxQueueLength !== -1) {
+    result.maxQueueLength = clamp(result.maxQueueLength, 0, 100);
+  }
   return result;
 }
 

@@ -17,6 +17,7 @@ import { prepareRunningHubWebAppCompatibility } from './runningHubWebAppCompatib
 import { prepareRunningHubUploadAsset } from './runningHubUploadAdapter.js';
 import { validateWorkflowRunReceipt } from './workflowRunResult.js';
 import { RUNNINGHUB_ACCESS_DEFAULTS } from './runningHubAccessConfig.js';
+import { RunningHubTaskQueue } from './runningHubTaskQueue.js';
 
 // 查询间隔的技术下限：抖动把间隔算成负值或过小时，等待仍不能为 0（防止忙轮询）。
 const MIN_POLL_DELAY_MS = 100;
@@ -209,6 +210,10 @@ export class RunningHubWorkflowExecutor {
       wait,
       now,
       logger,
+      taskQueue: new RunningHubTaskQueue({
+        maxConcurrent: RUNNINGHUB_ACCESS_DEFAULTS.maxConcurrent,
+        maxQueueLength: RUNNINGHUB_ACCESS_DEFAULTS.maxQueueLength,
+      }),
     });
   }
 
@@ -415,6 +420,48 @@ export class RunningHubWorkflowExecutor {
   }
 
   async execute({
+    runId,
+    definitionId,
+    deploymentId,
+    bindingSetId,
+    projectId,
+    values,
+    instanceType,
+    signal,
+  }) {
+    // 读取最新配置并更新队列
+    const config = await this.accessConfig();
+    this.taskQueue.updateConfig({
+      maxConcurrent: config.maxConcurrent,
+      maxQueueLength: config.maxQueueLength,
+    });
+
+    // 排队申请槽位
+    await this.taskQueue.acquire(runId);
+
+    // 如果信号已 abort，直接释放并返回
+    if (signal.aborted) {
+      this.taskQueue.release(runId);
+      return { ok: false, code: 'WORKFLOW_RUN_CANCELLED', message: '任务已取消。' };
+    }
+
+    try {
+      return await this._executeInner({
+        runId,
+        definitionId,
+        deploymentId,
+        bindingSetId,
+        projectId,
+        values,
+        instanceType,
+        signal,
+      });
+    } finally {
+      this.taskQueue.release(runId);
+    }
+  }
+
+  async _executeInner({
     runId,
     definitionId,
     deploymentId,
