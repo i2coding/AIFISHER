@@ -293,6 +293,12 @@ export class WorkflowTestRunService {
       });
     }
 
+    const isRunningHubRunner = ['runninghub-workflow', 'runninghub-webapp'].includes(deployment.runner);
+    // RunningHub 不在外层准入闸限流：并发上限与排队队列完全由内层
+    // RunningHubTaskQueue（读设置页「最大并发任务数 / 等待队列长度」）负责。
+    // 外层传 0 = 不限制（coordinator.getConcurrency: limit===0 时 blocked=false），
+    // 仅保留 NODE_GENERATION_ACTIVE 防同一个 nodeId 重复提交。本地 ComfyUI 保持 1。
+    const admissionMaxConcurrent = isRunningHubRunner ? 0 : 1;
     const lease = this.coordinator.begin({
       nodeId: reservation.record.runId,
       kind,
@@ -301,12 +307,12 @@ export class WorkflowTestRunService {
         : deployment.runner === 'runninghub-workflow'
           ? 'RunningHub Workflow'
           : 'Local ComfyUI',
-      modelIdKey: ['runninghub-workflow', 'runninghub-webapp'].includes(deployment.runner)
+      modelIdKey: isRunningHubRunner
         ? `runninghub:${deployment.connection.baseUrl}:${
             deployment.connection.remoteWebAppId || deployment.connection.remoteWorkflowId
           }`
         : `comfy:${deployment.connection.serverUrl}`,
-      maxConcurrent: 1,
+      maxConcurrent: admissionMaxConcurrent,
       timeEstimate: '1min',
       leaseHeartbeatMs: 30_000,
       absoluteTimeoutMs: deployment.timeoutMs + 30 * 60_000,
