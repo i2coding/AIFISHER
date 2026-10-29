@@ -24,6 +24,37 @@ interface Components {
   RemoveIcon: Icon;
 }
 
+/**
+ * 参考图的顺序就是 parentIds 的顺序：缩略图上的「图片1/图片2」由数组下标推导，
+ * 所以拖动排序只要把这两个数组一起搬动，编号和生成时的引用顺序自然就跟着变。
+ *
+ * parentIds 里出现空串表示这是 ComfyUI 的固定占位槽位（槽位号由端口决定，不是顺序），
+ * 那种情况不在这里重排，避免把占位槽的顺序搅乱。
+ */
+function reorderParentIds(
+  node: CanvasConnectionNode,
+  fromId: string,
+  toId: string,
+  placement: 'before' | 'after',
+): Pick<CanvasConnectionNode, 'parentIds' | 'sourcePortIndices'> | null {
+  const parentIds = [...(node.parentIds ?? [])];
+  if (parentIds.includes('')) return null;
+  const from = parentIds.indexOf(fromId);
+  const to = parentIds.indexOf(toId);
+  if (from < 0 || to < 0 || from === to) return null;
+  const sourcePortIndices = [...(node.sourcePortIndices ?? [])];
+  while (sourcePortIndices.length < parentIds.length) sourcePortIndices.push(0);
+  const [movedId] = parentIds.splice(from, 1);
+  const [movedPort] = sourcePortIndices.splice(from, 1);
+  let insertAt = parentIds.indexOf(toId);
+  if (insertAt < 0) return null;
+  if (placement === 'after') insertAt += 1;
+  parentIds.splice(insertAt, 0, movedId);
+  sourcePortIndices.splice(insertAt, 0, movedPort ?? 0);
+  return { parentIds, sourcePortIndices };
+}
+
+
 export function CanvasConnectedAssets(
   React: Pick<typeof ReactTypes, 'createElement' | 'useState' | 'useRef' | 'useEffect'>,
   { node, connectedImageNodes = [], disabled = false, onUpdate }: ConnectedAssetsProps,
@@ -33,6 +64,10 @@ export function CanvasConnectedAssets(
   const [previewId, setPreviewId] = React.useState<string | null>(null);
   const [filter, setFilter] = React.useState('all');
   const [hover, setHover] = React.useState<{ id: string; left: number; top: number } | null>(null);
+  const [dragAssetId, setDragAssetId] = React.useState<string | null>(null);
+  const [dropHint, setDropHint] = React.useState<{ id: string; placement: 'before' | 'after' } | null>(
+    null,
+  );
   const closeTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const keepHover = () => clearTimeout(closeTimer.current);
   const closeHover = () => {
@@ -96,6 +131,16 @@ export function CanvasConnectedAssets(
     }
     onUpdate(node.id, patch);
   };
+  // 顺序本身就是引用顺序，所以拖动缩略图不需要额外的排序字段。
+  const reorderable = !disabled && assets.length > 1 && !(node.parentIds ?? []).includes('');
+  const placementAt = (event: ReactTypes.DragEvent, element: HTMLElement): 'before' | 'after' => {
+    const rect = element.getBoundingClientRect();
+    return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
+  };
+  const reorder = (fromId: string, toId: string, placement: 'before' | 'after') => {
+    const next = reorderParentIds(node, fromId, toId, placement);
+    if (next) onUpdate(node.id, next);
+  };
   return (
     <div
       data-fisherai-connected-asset-strip="true"
@@ -149,11 +194,14 @@ export function CanvasConnectedAssets(
                         : undefined;
                   const Placeholder =
                     kind === 'video' ? VideoIcon : kind === 'audio' ? AudioIcon : ImageIcon;
+                  const hint = dropHint?.id === asset.id ? dropHint.placement : null;
                   return (
                     <div
                       key={asset.id}
                       className="relative group/frame shrink-0"
-                      draggable={false}
+                      draggable={reorderable}
+                      title={reorderable ? '拖动可调整参考图顺序' : undefined}
+                      style={{ opacity: dragAssetId === asset.id ? 0.35 : 1 }}
                       onMouseEnter={(event) => showHover(asset.id, event.currentTarget)}
                       onMouseLeave={closeHover}
                       onFocus={(event) => showHover(asset.id, event.currentTarget)}
@@ -161,13 +209,62 @@ export function CanvasConnectedAssets(
                         if (!event.currentTarget.contains(event.relatedTarget as Node))
                           closeHover();
                       }}
-                      onDragStart={(event) => event.preventDefault()}
+                      onDragStart={(event) => {
+                        if (!reorderable) {
+                          event.preventDefault();
+                          return;
+                        }
+                        event.stopPropagation();
+                        setDragAssetId(asset.id);
+                        setDropHint(null);
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', asset.id);
+                      }}
+                      onDragEnd={() => {
+                        setDragAssetId(null);
+                        setDropHint(null);
+                      }}
+                      onDragOver={(event) => {
+                        if (!reorderable || !dragAssetId || dragAssetId === asset.id) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.dataTransfer.dropEffect = 'move';
+                        const placement = placementAt(event, event.currentTarget);
+                        setDropHint((current) =>
+                          current?.id === asset.id && current.placement === placement
+                            ? current
+                            : { id: asset.id, placement },
+                        );
+                      }}
+                      onDragLeave={(event) => {
+                        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                        setDropHint((current) => (current?.id === asset.id ? null : current));
+                      }}
+                      onDrop={(event) => {
+                        if (!reorderable || !dragAssetId || dragAssetId === asset.id) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        reorder(dragAssetId, asset.id, placementAt(event, event.currentTarget));
+                        setDragAssetId(null);
+                        setDropHint(null);
+                      }}
                     >
+                      {hint && (
+                        <span
+                          aria-hidden="true"
+                          data-fisherai-asset-drop-hint="true"
+                          className="absolute top-0 bottom-0 w-[2px] bg-[var(--af-primary)] rounded-full pointer-events-none z-20"
+                          style={hint === 'before' ? { left: '-5px' } : { right: '-5px' }}
+                        />
+                      )}
                       <button
                         type="button"
                         aria-label={`插入引用${label}`}
                         disabled={disabled}
-                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseDown={(event) => {
+                          // 阻止默认按下行为会连带阻止 HTML5 拖拽，所以只在不能排序时才拦。
+                          if (!reorderable) event.preventDefault();
+                        }}
                         onClick={(event) => {
                           event.stopPropagation();
                           event.currentTarget

@@ -3,6 +3,7 @@ import type { AlignmentGuide } from './canvasAlignment';
 import type * as ReactTypes from 'react';
 import type { EdgeNode } from './canvasEdges';
 import { CanvasWallpaper } from '../appearance/CanvasWallpaper';
+import { registerNodeConnections } from '../nodes/canvasNodeFrame';
 type Runtime = Pick<
   typeof ReactTypes,
   | 'createElement'
@@ -177,6 +178,9 @@ function sameSceneNode(a: Parameters<typeof SceneNode>[0], b: Parameters<typeof 
 }
 
 export function CanvasScene(React: Runtime, props: Props, components: Components) {
+  // 连接点的空心/实心需要一个反向索引（谁是我的下游）。节点只知道自己的 parentIds，
+  // 所以在渲染子树之前用整张节点表登记一次，连接点渲染时直接查这张表。
+  registerNodeConnections(props.nodes);
   const MemoSceneNode = React.useMemo(() => React.memo(SceneNode, sameSceneNode), [React]);
   const actions = useNodeActions(React, props);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
@@ -194,6 +198,7 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
     selectedNodeIds,
     visibleNodeIds,
     visibleGroups,
+    groups: allGroups,
     nodesByGroupId,
     nodeDisplayData,
     documentEpoch,
@@ -231,11 +236,23 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
       observer.disconnect();
     };
   }, [canvasRef, documentEpoch]);
+  // 拖动组内节点期间钉住的组框（由 canvasApplication 在按下节点时冻结）。
+  const frozenGroupFrame = props.frozenGroupFrame as
+    | { groupId: string; left: number; top: number; right: number; bottom: number }
+    | null;
+  // 组框上的连接点：把整组成员当成一个输出，直接连到下游节点。
+  const groupConnectorDown = props.onGroupBatchConnectorDown as
+    | ((
+        event: ReactTypes.PointerEvent,
+        side: 'left' | 'right',
+        groupId: string,
+        nodeIds: string[],
+      ) => void)
+    | undefined;
   const selectionProps = {
     documentEpoch,
     viewport,
-    onRenameGroup: props.onRenameGroup,
-    onGridLayout: props.onGridLayout,
+    onRenameGroup: props.onRenameGroup,    onGridLayout: props.onGridLayout,
     onToggleGridSlider: props.onToggleGridSlider,
     onCreateCollage: props.onCreateCollage,
     showGridSlider: props.showGridSlider,
@@ -293,6 +310,23 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
             selectedConnection={props.selectedConnection}
             onEdgeClick={props.onEdgeClick}
             onEdgeDoubleClick={props.onEdgeDoubleClick}
+            onEdgeShiftDown={props.onEdgeShiftDown}
+            groups={allGroups as { id: string; nodeIds: string[] }[]}
+            rewiringEdge={
+              props.rewiringEdge as
+                | { parentId: string; childId: string; portIndex: number }
+                | null
+            }
+            bundlePreview={
+              props.bundlePreview as
+                | {
+                    side: 'left' | 'right';
+                    edges: { nodeId: string; portIndex: number }[];
+                    point: { x: number; y: number };
+                    targetId?: string | null;
+                  }
+                | null
+            }
           />
         </svg>
         {selectedNodeIds.length > 1 && (
@@ -337,6 +371,23 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
                 }
               }}
               isSelected={false}
+              frameOverride={
+                frozenGroupFrame && frozenGroupFrame.groupId === group.id
+                  ? frozenGroupFrame
+                  : null
+              }
+              onSelectionResizeStart={props.onSelectionResizeStart}
+              onBatchConnectorDown={
+                groupConnectorDown
+                  ? (event: ReactTypes.PointerEvent, side: 'left' | 'right') =>
+                      groupConnectorDown(
+                        event,
+                        side,
+                        group.id,
+                        members.map((node) => node.id),
+                      )
+                  : undefined
+              }
             />
           );
         })}

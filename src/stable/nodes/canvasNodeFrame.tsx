@@ -8,6 +8,7 @@ interface NodeData {
   x: number;
   y: number;
   title?: string;
+  parentIds?: string[];
   projectId?: string;
   networkUrl?: string;
   resultAspectRatio?: string;
@@ -19,55 +20,61 @@ interface ConnectorProps {
   side: 'left' | 'right';
   zoom?: number;
   selected?: boolean;
+  hasIncoming?: boolean;
   onConnectorDown(event: ReactTypes.PointerEvent, id: string, side: 'left' | 'right'): void;
 }
 const validZoom = (zoom = 1) => (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
-export function CanvasConnector(React: Runtime, props: ConnectorProps, PlusIcon: Icon) {
-  const { side, nodeId, onConnectorDown } = props,
-    zoom = validZoom(props.zoom);
-  const [offset, setOffset] = React.useState({ x: 0, y: 0, active: false });
+/** 圆点直径与可点击热区直径：热区比圆点大得多，鼠标不用瞄准。 */
+const ANCHOR_SIZE = 28;
+const ANCHOR_HIT_SIZE = 50;
+
+/**
+ * 节点输出端索引：场景在渲染前登记一次，输出圆点据此判断"有没有连线"。
+ * 输入侧直接看节点自己的 parentIds，输出侧是反向关系，只能靠这张表。
+ */
+let nodesWithChildren: ReadonlySet<string> = new Set<string>();
+export function registerNodeConnections(
+  nodes: readonly { id: string; parentIds?: readonly string[] }[],
+): void {
+  const next = new Set<string>();
+  for (const node of nodes) for (const parentId of node.parentIds ?? []) next.add(parentId);
+  nodesWithChildren = next;
+}
+
+export function CanvasConnector(_React: Runtime, props: ConnectorProps, _icon?: Icon) {
+  const { side, nodeId, onConnectorDown } = props;
+  // 左端看自己有没有上游，右端看有没有下游被别人引用。
+  const connected = side === 'left' ? props.hasIncoming === true : nodesWithChildren.has(nodeId);
   return (
     <div
-      className={`absolute ${props.selected ? 'flex' : 'hidden group-hover/node:flex'} focus-within:flex items-center justify-center z-10 pointer-events-auto rounded-full`}
+      className="absolute z-20 flex items-center justify-center pointer-events-auto rounded-full"
       style={{
-        width: '84px',
-        height: '84px',
-        [side]: '-62px',
+        width: ANCHOR_HIT_SIZE,
+        height: ANCHOR_HIT_SIZE,
+        [side]: -(ANCHOR_HIT_SIZE / 2),
         top: '50%',
         transform: 'translateY(-50%)',
       }}
-      onMouseMove={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect(),
-          x = event.clientX - rect.left - rect.width / 2,
-          y = event.clientY - rect.top - rect.height / 2;
-        const screenZoom = rect.width > 0 ? rect.width / 84 : zoom;
-        setOffset(
-          Math.hypot(x, y) <= rect.width / 2
-            ? { x: x / screenZoom, y: y / screenZoom, active: true }
-            : { x: 0, y: 0, active: false },
-        );
-      }}
-      onMouseLeave={() => setOffset({ x: 0, y: 0, active: false })}
     >
       <button
         type="button"
         aria-label={side === 'left' ? '连接输入' : '连接输出'}
+        aria-pressed={connected}
         data-fisherai-connector-node-id={nodeId}
         data-fisherai-connector-side={side}
+        data-fisherai-connector-connected={connected ? 'true' : 'false'}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.stopPropagation();
           onConnectorDown(event, nodeId, side);
         }}
-        className={`w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-75 border-[var(--af-border-control)] bg-[var(--af-surface)] text-[var(--af-text-secondary)] hover:text-[var(--af-text)] hover:border-[var(--af-border-control)] cursor-crosshair shadow-lg focus:opacity-100 ${offset.active ? 'opacity-100' : 'opacity-0 group-hover/node:opacity-100'}`}
-        style={{
-          transform: `translate(${offset.x}px, ${offset.y}px) scale(${Math.max(1, 1 / zoom)})`,
-          transformOrigin: 'center',
-          transition: offset.active ? 'none' : 'opacity 0.2s ease-out, color 0.2s ease-out, border-color 0.2s ease-out',
-        }}
-      >
-        <PlusIcon size={12} strokeWidth={3} />
-      </button>
+        className={`rounded-full border-2 cursor-crosshair transition-colors duration-150 hover:scale-110 focus-visible:scale-110 ${
+          connected
+            ? 'bg-[var(--af-text-secondary)] border-[var(--af-text-secondary)]'
+            : 'bg-[var(--af-surface)] border-[var(--af-border-control)] hover:border-[var(--af-text-secondary)]'
+        }`}
+        style={{ width: ANCHOR_SIZE, height: ANCHOR_SIZE, transformOrigin: 'center' }}
+      />
     </div>
   );
 }
@@ -150,6 +157,7 @@ export function CanvasNodeFrame(
         nodeType: data.type,
         zoom,
         selected,
+        hasIncoming: (data.parentIds?.length ?? 0) > 0,
       })}
       <div className="relative group/nodecard flex flex-col items-center">
         <div

@@ -70,16 +70,6 @@ function isSourceVisible(source: string): boolean {
   return readSourceToggles()[source] !== false;
 }
 
-function setSourceVisible(source: string, visible: boolean): void {
-  try {
-    const toggles = readSourceToggles();
-    toggles[source] = visible;
-    preferenceStorage()?.setItem(SOURCE_TOGGLE_STORAGE_KEY, JSON.stringify(toggles));
-  } catch {
-    /* 隐私模式下写不进去就只在本次生效，不值得报错。 */
-  }
-}
-
 type ModelPricingLoader = (
   resolution: string | null,
   mode: string | null,

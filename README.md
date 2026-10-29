@@ -1,18 +1,19 @@
-<p align="center">
-  <img src="docs/assets/hero.svg" width="100%" alt="AIFISHER 画布 · 2.0 起源 — 让灵感连成作品" />
+<p align="center">  
+  <img src="docs/assets/hero.svg" width="100%" alt="AIFISHER 画布 · 2.0 起源 — 让灵感连成作品" />  
 </p>
 
-<p align="center">
-  <strong>一张画布，连接图片、视频、音频、文字与 AI 工作流。</strong><br />
-  从灵感到素材，从分镜到生成，把创作过程留在同一个空间。
+<p align="center">  
+  <strong>一张画布，连接图片、视频、音频、文字与 AI 工作流。</strong>  
+  
+  从灵感到素材，从分镜到生成，把创作过程留在同一个空间。  
 </p>
 
-<p align="center">
-  <a href="https://api.work-fisher.com/"><strong>AIFISHER API ↗</strong></a> ·
-  <a href="#创作案例">创作案例</a> ·
-  <a href="#开始使用">开始使用</a> ·
-  <a href="https://github.com/Work-Fisher/AIFISHER/releases">版本发布</a> ·
-  <a href="LICENSE">非商业许可</a>
+<p align="center">  
+  <a href="https://api.work-fisher.com/"><strong>AIFISHER API ↗</strong></a> ·  
+  <a href="#创作案例">创作案例</a> ·  
+  <a href="#开始使用">开始使用</a> ·  
+  <a href="https://github.com/Work-Fisher/AIFISHER/releases">版本发布</a> ·  
+  <a href="LICENSE">非商业许可</a>  
 </p>
 
 ---
@@ -29,41 +30,46 @@
 
 以下选自随画布提供的风格与运镜素材库，展示可浏览的视觉方向；实际生成效果取决于模型、提示词与参考素材。
 
-<table>
-  <tr>
-    <td width="33%"><a href="public/creative-presets/style-643.webp"><img src="public/creative-presets/style-643.webp" width="100%" alt="动画风格：夏日机车少女" /></a></td>
-    <td width="33%"><a href="public/mj-styles/char6-preview.webp"><img src="public/mj-styles/char6-preview.webp" width="100%" alt="生活人像：自然光与日常氛围" /></a></td>
-    <td width="33%"><a href="public/mj-styles/char7-preview.webp"><img src="public/mj-styles/char7-preview.webp" width="100%" alt="科幻人像：太空头盔与电影光色" /></a></td>
-  </tr>
-  <tr>
-    <td><strong>01 / 动画风格</strong><br />鲜明配色 · 角色与场景</td>
-    <td><strong>02 / 生活人像</strong><br />自然光线 · 日常氛围</td>
-    <td><strong>03 / 科幻影像</strong><br />电影光色 · 人物特写</td>
-  </tr>
+<table>  
+  <tr>  
+    <td width="33%"><a href="public/creative-presets/style-643.webp"><img src="public/creative-presets/style-643.webp" width="100%" alt="动画风格：夏日机车少女" /></a></td>  
+    <td width="33%"><a href="public/mj-styles/char6-preview.webp"><img src="public/mj-styles/char6-preview.webp" width="100%" alt="生活人像：自然光与日常氛围" /></a></td>  
+    <td width="33%"><a href="public/mj-styles/char7-preview.webp"><img src="public/mj-styles/char7-preview.webp" width="100%" alt="科幻人像：太空头盔与电影光色" /></a></td>  
+  </tr>  
+  <tr>  
+    <td><strong>01 / 动画风格</strong>  
+鲜明配色 · 角色与场景</td>  
+    <td><strong>02 / 生活人像</strong>  
+自然光线 · 日常氛围</td>  
+    <td><strong>03 / 科幻影像</strong>  
+电影光色 · 人物特写</td>  
+  </tr>  
 </table>
 
 ### 让画面动起来
 
 点击封面打开视频，在 GitHub 文件页播放或下载。
 
-<table>
-  <tr>
-    <td width="50%"><a href="https://github.com/Work-Fisher/AIFISHER/blob/main/public/creative-presets/motion-692.mp4"><img src="public/creative-presets/motion-692.jpg" width="100%" alt="播放环绕上升运镜视频" /></a></td>
-    <td width="50%"><a href="https://github.com/Work-Fisher/AIFISHER/blob/main/public/creative-presets/motion-659.mp4"><img src="public/creative-presets/motion-659.jpg" width="100%" alt="播放希区柯克变焦运镜视频" /></a></td>
-  </tr>
-  <tr>
-    <td><strong>▶ 环绕上升</strong><br />人物、空间与镜头运动</td>
-    <td><strong>▶ 希区柯克变焦</strong><br />前后景变化与视觉张力</td>
-  </tr>
+<table>  
+  <tr>  
+    <td width="50%"><a href="https://github.com/Work-Fisher/AIFISHER/blob/main/public/creative-presets/motion-692.mp4"><img src="public/creative-presets/motion-692.jpg" width="100%" alt="播放环绕上升运镜视频" /></a></td>  
+    <td width="50%"><a href="https://github.com/Work-Fisher/AIFISHER/blob/main/public/creative-presets/motion-659.mp4"><img src="public/creative-presets/motion-659.jpg" width="100%" alt="播放希区柯克变焦运镜视频" /></a></td>  
+  </tr>  
+  <tr>  
+    <td><strong>▶ 环绕上升</strong>  
+人物、空间与镜头运动</td>  
+    <td><strong>▶ 希区柯克变焦</strong>  
+前后景变化与视觉张力</td>  
+  </tr>  
 </table>
 
 ## 在同一张画布里完成
 
-| 连接素材 | 连接模型 | 连接创作流程 |
-| :--- | :--- | :--- |
-| 图片、视频、音频与文字节点 | AIFISHER API 与其他模型服务 | Agent 辅助规划与操作 |
-| 引用素材、参数调整与生成结果 | 本地 ComfyUI 与 RunningHub | API 工作流导入与参数配置 |
-| 项目与素材保存在本机 | 使用自己的服务商 API Key | 公开 SKILL 与自定义技能 |
+| 连接素材           | 连接模型                    | 连接创作流程          |
+| :------------- | :---------------------- | :-------------- |
+| 图片、视频、音频与文字节点  | AIFISHER API 与其他模型服务    | Agent 辅助规划与操作   |
+| 引用素材、参数调整与生成结果 | 本地 ComfyUI 与 RunningHub | API 工作流导入与参数配置  |
+| 项目与素材保存在本机     | 使用自己的服务商 API Key        | 公开 SKILL 与自定义技能 |
 
 ## 开始使用
 
@@ -74,6 +80,7 @@
 > **源码公开，仅限非商业用途。** 禁止接单、商业制作、倒卖安装包、商业二开或收费托管。完整条款见 [LICENSE](LICENSE)。本项目不属于 OSI 定义的开源许可。
 
 <details>
+
 <summary><strong>公开源码包含什么？</strong></summary>
 
 画布、Agent、模型接入、本地 ComfyUI、RunningHub、可选账号及已获公开再分发授权的风格 / MJ 码图素材。作者保留的闭源 SKILL 正文、私有共享模板、个人账户与密钥不在公开范围内。正式安装包可能包含闭源内容，详见 [公开范围](SOURCE-SCOPE.md)。

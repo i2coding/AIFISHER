@@ -10,6 +10,15 @@ import { useCanvasImageUpscale } from '../media/canvasImageUpscale';
 import { createImageAngleDraft } from '../media/imageAngleDraft';
 import type { ImageAngle } from '../prompt/imageAngle';
 import { createCanvasSceneProjector, canvasVisibleScene } from './canvasSceneData';
+import { disconnectCanvasNodes } from './canvasConnections';
+import { screenToCanvas } from './canvasNavigation';
+import { useCanvasCutMode } from './canvasCutMode';
+import {
+  connectJoinedGroupLinks,
+  dropDepartedGroupLinks,
+  syncCanvasGroupMembership,
+} from './canvasGroupMembership';
+import { reattachBundle } from './canvasBundleReattach';
 import { applyCanvasPromptProposal } from '../agent/canvasPromptProposal';
 import type { PromptProposal } from '../agent/codexClient';
 import { flushSync } from 'react-dom';
@@ -148,6 +157,22 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       handleCloseResize,
     } = usePanels(),
     [batchConnecting, setBatchConnecting] = React.useState(false),
+    // 从组框连接点发起批连线时，用它覆盖"按当前选中项批连"的默认来源。
+    [groupBatchSourceIds, setGroupBatchSourceIds] = React.useState<string[] | null>(null),
+    // 拖动组内节点时冻结的组框：框不再跟着成员变大，节点中心跑出这个框就算离开。
+    [frozenGroupFrame, setFrozenGroupFrame] = React.useState<{
+      groupId: string;
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+    } | null>(null),
+    // Shift 改接期间要在画面上隐藏原线，所以必须是 state（ref 不会触发重渲染）。
+    [rewiringEdge, setRewiringEdge] = React.useState<{
+      parentId: string;
+      childId: string;
+      portIndex: number;
+    } | null>(null),
     selectedCoverRef = React.useRef<string | null>(null),
     newProjectPendingRef = React.useRef(false);
   const {
@@ -354,6 +379,298 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
 
   const deferFrame = useCanvasDeferredFrame(React, view === 'canvas', getWorkflowEpoch);
   const windowSize = useCanvasSurfaceSize(React, canvasRef, view, getWorkflowEpoch());
+
+  // 按住 C 划一道线，划过的连线松手后一起断开。
+  useCanvasCutMode(React, {
+    containerRef: canvasRef,
+    enabled: view === 'canvas',
+    onCut: (cuts) => {
+      setNodes((current) =>
+        cuts.reduce((result, cut) => disconnectCanvasNodes(result, cut), current),
+      );
+    },
+  });
+
+  // Shift 抓住连线的一端改接：拖到别的节点就换掉原来那一端。
+  const rewireRef = React.useRef<{
+    parentId: string;
+    childId: string;
+    portIndex: number;
+    end: 'parent' | 'child';
+    /** 断开前的子节点快照：取消/失败时整条连线原样放回去（连槽位顺序都不变）。 */
+    childSnapshot: CanvasNode;
+  } | null>(null);
+  const completedConnectionsRef = React.useRef<string[][]>([]);
+  const startEdgeRewire = React.useCallback(
+    (
+      event: ReactTypes.PointerEvent,
+      parentId: string,
+      childId: string,
+      portIndex: number,
+      forcedEnd?: 'parent' | 'child',
+    ) => {
+      const parent = nodes.find((node) => node.id === parentId),
+        child = nodes.find((node) => node.id === childId);
+      if (!parent || !child) return;
+      const point = screenToCanvas({ x: event.clientX, y: event.clientY }, viewport),
+        parentCenter = parent.x + getNodeWidth(parent) / 2,
+        childCenter = child.x + getNodeWidth(child) / 2,
+        // 离哪一端近就抓哪一端：抓下游端改"接到谁"，抓上游端改"从哪来"。
+        // 从节点圆点起手时由调用方直接指定，不靠距离猜。
+        end: 'parent' | 'child' =
+          forcedEnd ??
+          (Math.abs(point.x - childCenter) <= Math.abs(point.x - parentCenter)
+            ? 'child'
+            : 'parent');
+      rewireRef.current = { parentId, childId, portIndex, end, childSnapshot: child };
+      setRewiringEdge({ parentId, childId, portIndex });
+      // 立刻断开：原线从画面上消失，只剩跟着鼠标的那条；失败/取消时用快照还原。
+      setNodes((latest) => disconnectCanvasNodes(latest, { parentId, childId, portIndex }));
+      setBatchConnecting(false);
+      setGroupBatchSourceIds(null);
+      if (end === 'child') handleConnectorPointerDown(event, parentId, 'right', portIndex);
+      else handleConnectorPointerDown(event, childId, 'left', portIndex);
+    },
+    [nodes, viewport, getNodeWidth, handleConnectorPointerDown],
+  );
+
+  // Shift 抓住端口 = 把整个端口上的连线当成一束一起搬（ComfyUI 的换线手感）。
+  const bundleRef = React.useRef<{
+    nodeId: string;
+    side: 'left' | 'right';
+    items: { parentId: string; childId: string; portIndex: number; sourcePortIndex: number }[];
+    snapshots: Map<string, CanvasNode>;
+  } | null>(null);
+  const [bundlePreview, setBundlePreview] = React.useState<{
+    side: 'left' | 'right';
+    edges: { nodeId: string; portIndex: number }[];
+    /** 鼠标位置（画布坐标），预览线从这里发散。 */
+    point: { x: number; y: number };
+    /** 当前悬停的落点节点，给蓝框高亮用。 */
+    targetId: string | null;
+  } | null>(null);
+  const bundleViewportRef = React.useRef(viewport);
+  bundleViewportRef.current = viewport;
+  const bundleNodesRef = React.useRef(nodes);
+  bundleNodesRef.current = nodes;
+
+  const startBundleDrag = React.useCallback(
+    (event: ReactTypes.PointerEvent, nodeId: string, side: 'left' | 'right') => {
+      const items: { parentId: string; childId: string; portIndex: number; sourcePortIndex: number }[] =
+        [];
+      if (side === 'right') {
+        // 输出口：所有把这个节点当上游的连接一起拎起来。
+        for (const child of nodes) {
+          (child.parentIds || []).forEach((parentId, portIndex) => {
+            if (parentId !== nodeId) return;
+            items.push({
+              parentId: nodeId,
+              childId: child.id,
+              portIndex,
+              sourcePortIndex: child.sourcePortIndices?.[portIndex] ?? 0,
+            });
+          });
+        }
+      } else {
+        // 输入口：这个节点身上的全部输入一起拎起来。
+        const self = nodes.find((node) => node.id === nodeId);
+        (self?.parentIds || []).forEach((parentId, portIndex) => {
+          if (!parentId) return;
+          items.push({
+            parentId,
+            childId: nodeId,
+            portIndex,
+            sourcePortIndex: self?.sourcePortIndices?.[portIndex] ?? 0,
+          });
+        });
+      }
+      if (!items.length) return false;
+      const snapshots = new Map<string, CanvasNode>();
+      for (const item of items) {
+        const child = nodes.find((node) => node.id === item.childId);
+        if (child && !snapshots.has(child.id)) snapshots.set(child.id, child);
+      }
+      bundleRef.current = { nodeId, side, items, snapshots };
+      // 立刻全部断开：画面上这束线会收成一个点跟着鼠标，和 ComfyUI 一样。
+      setNodes((current) =>
+        items.reduce((result, item) => disconnectCanvasNodes(result, item), current),
+      );
+      setBundlePreview({
+        side,
+        edges: items.map((item) => ({
+          nodeId: side === 'right' ? item.childId : item.parentId,
+          portIndex: item.portIndex,
+        })),
+        point: screenToCanvas({ x: event.clientX, y: event.clientY }, viewport),
+        targetId: null,
+      });
+      setRewiringEdge(null);
+      setBatchConnecting(false);
+      setGroupBatchSourceIds(null);
+      return true;
+    },
+    [nodes, viewport, setNodes],
+  );
+
+  const finishBundleDrag = React.useCallback(
+    (targetId: string | null) => {
+      const bundle = bundleRef.current;
+      bundleRef.current = null;
+      setBundlePreview(null);
+      if (!bundle) return;
+      if (!targetId || targetId === bundle.nodeId) {
+        // 松在空白或原节点上：整束原样还原（快照保住 parentIds 顺序与端口槽位）。
+        setNodes((current) => {
+          let next = current;
+          for (const snapshot of bundle.snapshots.values())
+            next = next.map((node) => (node.id === snapshot.id ? snapshot : node));
+          return next;
+        });
+        return;
+      }
+      setNodes((current) =>
+        reattachBundle(current, bundle.items, bundle.snapshots, targetId, bundle.side),
+      );
+    },
+    [setNodes],
+  );
+
+  /**
+   * 整束搬移自己管指针事件：不依赖连接拖拽那套状态机（它只识别"从端口拉一条新线"），
+   * pointermove 直接算悬停节点 → 预览收口 + 高亮，pointerup 直接算落点。
+   */
+  const locateBundleAt = React.useCallback(
+    (clientX: number, clientY: number) => {
+      const bundle = bundleRef.current;
+      if (!bundle) return null;
+      const point = screenToCanvas({ x: clientX, y: clientY }, bundleViewportRef.current);
+      const margin = 24;
+      const hit = bundleNodesRef.current.find((node) => {
+        if (node.id === bundle.nodeId) return false;
+        return (
+          point.x >= node.x - margin &&
+          point.x <= node.x + getNodeWidth(node) + margin &&
+          point.y >= node.y - margin &&
+          point.y <= node.y + getNodeHeight(node) + margin
+        );
+      });
+      return { point, targetId: hit?.id ?? null };
+    },
+    [getNodeWidth, getNodeHeight],
+  );
+
+  const bundleDragging = bundlePreview !== null;
+  React.useEffect(() => {
+    if (!bundleDragging) return;
+    const move = (event: PointerEvent) => {
+      const next = locateBundleAt(event.clientX, event.clientY);
+      if (!next) return;
+      setBundlePreview((current) =>
+        current ? { ...current, point: next.point, targetId: next.targetId } : current,
+      );
+    };
+    const finish = (event: PointerEvent) => {
+      if (!bundleRef.current) return;
+      finishBundleDrag(locateBundleAt(event.clientX, event.clientY)?.targetId ?? null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
+  }, [bundleDragging, finishBundleDrag, locateBundleAt]);
+
+  // 改接失败或取消：把子节点整条还原（保留 parentIds 原顺序，避免参考图编号错位）。
+  const restoreRewiredNode = React.useCallback(() => {
+    const pending = rewireRef.current;
+    rewireRef.current = null;
+    setRewiringEdge(null);
+    if (!pending) return;
+    setNodes((current) =>
+      current.map((node) => (node.id === pending.childId ? pending.childSnapshot : node)),
+    );
+  }, [setNodes, setRewiringEdge]);
+
+  // 组框上的连接点：把整组成员当成一个来源，一次连到下游。
+  const startGroupConnection = React.useCallback(
+    (
+      event: ReactTypes.PointerEvent,
+      side: 'left' | 'right',
+      _groupId: string,
+      nodeIds: string[],
+    ) => {
+      if (!nodeIds.length) return;
+      setGroupBatchSourceIds(nodeIds);
+      setBatchConnecting(true);
+      handleConnectorPointerDown(event, nodeIds[0], side);
+    },
+    [handleConnectorPointerDown],
+  );
+
+  // 拖动组内节点时把组框钉在原地：否则框会跟着被拖的节点一起变大，永远拖不出去。
+  const freezeGroupFrameFor = React.useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((item) => item.id === nodeId),
+        groupId = typeof node?.groupId === 'string' ? node.groupId : undefined;
+      const members = groupId ? nodes.filter((item) => item.groupId === groupId) : [];
+      if (!groupId || members.length < 2) {
+        setFrozenGroupFrame(null);
+        return;
+      }
+      let left = Infinity,
+        top = Infinity,
+        right = -Infinity,
+        bottom = -Infinity;
+      for (const member of members) {
+        left = Math.min(left, member.x);
+        top = Math.min(top, member.y);
+        right = Math.max(right, member.x + getNodeWidth(member));
+        bottom = Math.max(bottom, member.y + getNodeHeight(member));
+      }
+      if (![left, top, right, bottom].every(Number.isFinite)) {
+        setFrozenGroupFrame(null);
+        return;
+      }
+      // 与 canvasSelectionBounds / canvasEdges 的 50px 内缩保持一致。
+      setFrozenGroupFrame({
+        groupId,
+        left: left - 50,
+        top: top - 50,
+        right: right + 50,
+        bottom: bottom + 50,
+      });
+    },
+    [nodes, getNodeWidth, getNodeHeight],
+  );
+
+  // 拖动结束后结算组成员：拖进组框即加入，拖出去即离开。
+  const syncGroupsAfterDrag = React.useCallback(() => {
+    const next = syncCanvasGroupMembership(
+      nodes,
+      groups,
+      { width: getNodeWidth, height: getNodeHeight },
+      frozenGroupFrame,
+    );
+    setFrozenGroupFrame(null);
+    if (!next) return;
+
+    // 出组的节点要跟"这一组的连线"一起断开，否则看起来它还挂在组上。
+    const previousGroupIds = new Map<string, string | undefined>(
+      nodes.map((node) => [node.id, typeof node.groupId === 'string' ? node.groupId : undefined]),
+    );
+    // 出组：断开组内共有的那条线；入组：接到组已连着的下游上（两个方向对称）。
+    const updated = connectJoinedGroupLinks(
+      dropDepartedGroupLinks(next.nodes, previousGroupIds),
+      previousGroupIds,
+    );
+
+    setNodes(updated);
+    setGroups(next.groups);
+  }, [nodes, groups, getNodeWidth, getNodeHeight, frozenGroupFrame, setNodes, setGroups]);
+
 
   const {
       id: localUserId,
@@ -979,7 +1296,10 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       },
       [selectedNodeIds, handleConnectorPointerDown],
     ),
-    onConnectionCompleted = React.useCallback(() => {}, []),
+    onConnectionCompleted = React.useCallback((parent: string, child: string) => {
+      // 记录本次手势真正建立起来的连线，Shift 改接据此判断要不要删旧线。
+      completedConnectionsRef.current = [...completedConnectionsRef.current, [parent, child]];
+    }, []),
     onCanvasPointerUp = React.useCallback(
       (ke: ReactTypes.PointerEvent<HTMLDivElement>) => {
         if (isSelecting) {
@@ -987,10 +1307,51 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           releasePointerCapture(ke);
           return;
         }
+        // 整束搬移：画布内松手先在这里收尾（window 监听是画布外松手的兜底）。
+        if (bundleRef.current) {
+          finishBundleDrag(locateBundleAt(ke.clientX, ke.clientY)?.targetId ?? null);
+          releasePointerCapture(ke);
+          return;
+        }
         const st =
-          batchConnecting && connectionStart ? Array.from(new Set(selectedNodeIds)) : void 0;
-        if (completeConnectionDrag(handleAddNext, setNodes, nodes, onConnectionCompleted, ke, st)) {
+          batchConnecting && connectionStart
+            ? groupBatchSourceIds?.length
+              ? groupBatchSourceIds
+              : Array.from(new Set(selectedNodeIds))
+            : void 0;
+        // Shift 改接松在空白处：直接收手，不弹"添加节点"菜单。
+        const rewire = rewireRef.current;
+        if (rewire && !connectionHoveredNodeId) {
+          cancelConnectionDrag();
+          restoreRewiredNode();
+          releasePointerCapture(ke);
+          return;
+        }
+        completedConnectionsRef.current = [];
+        if (
+          completeConnectionDrag(handleAddNext, setNodes, nodes, onConnectionCompleted, ke, st)
+        ) {
+          const target = connectionHoveredNodeId;
+          if (rewire && target) {
+            // 旧线在起手时已经断开了，这里只在"真的接到了新的一端"时才保持断开。
+            const expectedParent = rewire.end === 'child' ? rewire.parentId : target,
+              expectedChild = rewire.end === 'child' ? target : rewire.childId,
+              connectedNow = completedConnectionsRef.current.some(
+                ([parent, child]) => parent === expectedParent && child === expectedChild,
+              ),
+              // 落回原来那一端 = 没换地方，还原快照以保住 parentIds 顺序。
+              sameEnd =
+                rewire.end === 'child' ? target === rewire.childId : target === rewire.parentId;
+            if (!connectedNow || sameEnd) restoreRewiredNode();
+            else {
+              rewireRef.current = null;
+              setRewiringEdge(null);
+            }
+          } else if (rewire) {
+            restoreRewiredNode();
+          }
           setBatchConnecting(false);
+          setGroupBatchSourceIds(null);
           releasePointerCapture(ke);
           return;
         }
@@ -1001,8 +1362,10 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
             pushHistory();
           }
         });
+        if (isDragging) syncGroupsAfterDrag();
         endNodeDrag();
         setBatchConnecting(false);
+        setGroupBatchSourceIds(null);
         releasePointerCapture(ke);
       },
       [
@@ -1026,6 +1389,12 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         endNodeResize,
         batchConnecting,
         selectedNodeIds,
+        groupBatchSourceIds,
+        connectionHoveredNodeId,
+        cancelConnectionDrag,
+        locateBundleAt,
+        restoreRewiredNode,
+        syncGroupsAfterDrag,
       ],
     ),
     saveAnnotation = media.useCanvasImageEditSave(React, {
@@ -1155,12 +1524,27 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       [sceneData, groups, viewport, windowSize],
     ),
     onEdgeDoubleClick = React.useCallback(
-      (ke: ReactTypes.MouseEvent, st: string, ot: string, Ge: number) => {
+      (
+        ke: ReactTypes.MouseEvent,
+        st: string,
+        ot: string,
+        Ge: number,
+        parentIds?: string[],
+      ) => {
         ke.stopPropagation();
-        setSelectedConnection({ parentId: st, childId: ot, portIndex: Ge });
-        deleteSelectedConnection(setNodes);
+        // 一条"组 → 下游"的线背后是多条成员连接，双击要一起断干净。
+        // Ge < 0 表示组连线，端口交给 disconnect 按 parentId 自行匹配。
+        const parents = parentIds?.length ? parentIds : [st],
+          portIndex = Ge >= 0 ? Ge : undefined;
+        setNodes((current) =>
+          parents.reduce(
+            (result, parentId) => disconnectCanvasNodes(result, { parentId, childId: ot, portIndex }),
+            current,
+          ),
+        );
+        setSelectedConnection(null);
       },
-      [setSelectedConnection, deleteSelectedConnection, setNodes],
+      [setSelectedConnection, setNodes],
     ),
     onEdgeClick = React.useCallback(
       (ke: ReactTypes.MouseEvent, st: string, ot: string, Ge: number) => {
@@ -1362,7 +1746,9 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     });
   const batchSourceNodeIds =
     batchConnecting && connectionStart
-      ? Array.from(new Set(selectedNodeIds))
+      ? groupBatchSourceIds?.length
+        ? groupBatchSourceIds
+        : Array.from(new Set(selectedNodeIds))
       : pendingBatchSourceNodeIds;
   return React.createElement('div', {
     key: 'div',
@@ -1466,7 +1852,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         connectionStart,
         tempConnectionEnd,
         batchConnectionSourceNodeIds: batchSourceNodeIds,
-        connectionHoveredNodeId,
+        connectionHoveredNodeId: bundlePreview?.targetId ?? connectionHoveredNodeId,
         connectionHoveredSide: hoveredSide,
         connectionHoveredPortIndex: hoveredPortIndex,
         isInvalidHover,
@@ -1485,6 +1871,11 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         onDrop,
         onEdgeClick,
         onEdgeDoubleClick,
+        onEdgeShiftDown: startEdgeRewire,
+        rewiringEdge,
+        frozenGroupFrame,
+        bundlePreview,
+        onGroupBatchConnectorDown: startGroupConnection,
         onGroup: (ke: string[]) => groupNodes(ke, nodes, setNodes),
         onUngroup: (ke: string) => ungroupNodes(ke, nodes, setNodes),
         onRenameGroup: renameGroup,
@@ -1510,6 +1901,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           if (!(ke.shiftKey || ke.ctrlKey || ke.metaKey)) {
             setSelectedConnection(null);
           }
+          freezeGroupFrameFor(st);
           handleNodePointerDown(ke, st, void 0);
         },
         onNodeContextMenu: handleNodeContextMenu,
@@ -1518,6 +1910,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           setSelectedConnection(null);
         },
         onGroupPointerDown: (ke: ReactTypes.PointerEvent<HTMLDivElement>, st: string[]) => {
+          setFrozenGroupFrame(null);
           const ht = window.__FISHERAI_CANVAS_SELECTION__;
           if (ht) {
             setSelectedNodeIds(ht.selectGroup(selectedNodeIds, st, ke));
@@ -1543,7 +1936,10 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           ot: 'left' | 'right',
           Ge: number,
         ) => {
+          // Shift + 拖节点圆点 = 把这个端口上的全部连线当成一束搬走（右输出、左输入）。
+          if (ke.shiftKey && startBundleDrag(ke, st, ot)) return;
           setBatchConnecting(false);
+          setGroupBatchSourceIds(null);
           handleConnectorPointerDown(ke, st, ot, Ge);
         },
         onSelectionResizeStart: (

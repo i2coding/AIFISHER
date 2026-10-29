@@ -26,6 +26,8 @@ interface Props {
   showGridSlider?: boolean;
   gridColumns?: number;
   isSelected?: boolean;
+  /** 拖动组内节点时钉住的组框（不再随成员包围盒变化）。 */
+  frameOverride?: { left: number; top: number; right: number; bottom: number } | null;
   isDragging?: boolean;
   isPanning?: boolean;
   onBatchConnectorDown?(event: ReactTypes.PointerEvent, side: 'left' | 'right'): void;
@@ -45,6 +47,7 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
     showGridSlider,
     gridColumns,
     isSelected,
+    frameOverride,
     isDragging,
     isPanning = false,
     onBatchConnectorDown,
@@ -130,9 +133,12 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
     right = Math.max(right, frame.x + frame.width + 50);
     bottom = Math.max(bottom, frame.y + frame.height + 50);
   }
-  const width = right - left,
-    height = bottom - top,
-    isGroup = !!group,
+  const isGroup = !!group,
+    pinned = isGroup && frameOverride ? frameOverride : null,
+    boxLeft = pinned ? pinned.left : left,
+    boxTop = pinned ? pinned.top : top,
+    width = pinned ? pinned.right - pinned.left : right - left,
+    height = pinned ? pinned.bottom - pinned.top : bottom - top,
     canGroup = selectedNodes.length > 1 && !isGroup,
     controlScale = Math.min(1 / viewport.zoom, 1.5),
     accent = '#3b82f6',
@@ -155,8 +161,8 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
       data-fisherai-group-id={group?.id}
       className={`absolute pointer-events-auto ${isPanning ? 'cursor-grabbing' : 'cursor-move'}`}
       style={{
-        left: left,
-        top: top,
+        left: boxLeft,
+        top: boxTop,
         width: width,
         height: height,
         border: isGroup ? `2px solid ${borderColor}` : `2px dashed ${borderColor}`,
@@ -230,78 +236,63 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
             key={event.pos}
           />
         ))}
-      {isSelected && selectedNodes.length > 1 && onBatchConnectorDown && !isDragging && (
-        <React.Fragment>
-          <div
-            className={
-              'absolute w-16 h-16 flex items-center justify-center z-10 pointer-events-auto rounded-full'
-            }
-            style={{
-              left: '-52px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-            }}
-          >
-            <button
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                onBatchConnectorDown(event, 'left');
-              }}
-              className={
-                'w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-75 border-[var(--af-border-control)] bg-[var(--af-input)] text-[var(--af-text-secondary)] hover:text-[var(--af-text)] hover:border-[var(--af-border-control)] cursor-crosshair shadow-lg opacity-100'
-              }
-              title={'批量输入连线'}
-            >
-              <svg
-                width={'12'}
-                height={'12'}
-                viewBox={'0 0 24 24'}
-                fill={'none'}
-                stroke={'currentColor'}
-                strokeWidth={'3'}
-                strokeLinecap={'round'}
-              >
-                <path d={'M12 5v14'} />
-                <path d={'M5 12h14'} />
-              </svg>
-            </button>
-          </div>
-          <div
-            className={
-              'absolute w-16 h-16 flex items-center justify-center z-10 pointer-events-auto rounded-full'
-            }
-            style={{
-              right: '-52px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-            }}
-          >
-            <button
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                onBatchConnectorDown(event, 'right');
-              }}
-              className={
-                'w-5 h-5 rounded-full border flex items-center justify-center transition-all duration-75 border-[var(--af-border-control)] bg-[var(--af-input)] text-[var(--af-text-secondary)] hover:text-[var(--af-text)] hover:border-[var(--af-border-control)] cursor-crosshair shadow-lg opacity-100'
-              }
-              title={'批量输出连线'}
-            >
-              <svg
-                width={'12'}
-                height={'12'}
-                viewBox={'0 0 24 24'}
-                fill={'none'}
-                stroke={'currentColor'}
-                strokeWidth={'3'}
-                strokeLinecap={'round'}
-              >
-                <path d={'M12 5v14'} />
-                <path d={'M5 12h14'} />
-              </svg>
-            </button>
-          </div>
-        </React.Fragment>
+      {/* 组框右下角的缩放柄：拖动按比例缩放整组成员。 */}
+      {isGroup && onSelectionResizeStart && !isDragging && (
+        <div
+          data-fisherai-group-resize-handle={'true'}
+          aria-label={'缩放整组'}
+          title={'拖动缩放整组'}
+          className={
+            'absolute rounded-sm border bg-[var(--af-primary)] pointer-events-auto z-20'
+          }
+          style={{
+            width: 14,
+            height: 14,
+            right: -7,
+            bottom: -7,
+            cursor: 'nwse-resize',
+            borderColor: borderColor,
+            transform: `scale(${controlScale})`,
+            transformOrigin: 'center',
+          }}
+          onPointerDown={(event) => resizeSelection(event, 'bottom-right')}
+        />
       )}
+      {/* 组框和多选都提供连接点：把整组成员当成一个输出，直接连到下游。 */}
+      {onBatchConnectorDown &&
+        !isDragging &&
+        (isGroup || (isSelected && selectedNodes.length > 1)) &&
+        [
+          { side: 'left' as const, label: '整组输入连线', position: { left: -17 } },
+          { side: 'right' as const, label: '整组输出连线', position: { right: -17 } },
+        ].map((connector) => (
+          <div
+            key={connector.side}
+            className={'absolute z-20 flex items-center justify-center pointer-events-auto'}
+            style={{
+              width: 34,
+              height: 34,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              ...connector.position,
+            }}
+          >
+            <button
+              type={'button'}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                onBatchConnectorDown(event, connector.side);
+              }}
+              title={connector.label}
+              aria-label={connector.label}
+              className={
+                'w-3.5 h-3.5 rounded-full border-2 cursor-crosshair transition-all duration-150 hover:scale-125 focus-visible:scale-125 border-[var(--af-border-control)] bg-[var(--af-surface)] hover:border-[var(--af-text-secondary)] hover:bg-[var(--af-text-secondary)]'
+              }
+              style={{ transformOrigin: 'center' }}
+            />
+          </div>
+        ))}
       {isGroup && group && (
         <div
           data-fisherai-group-title={'true'}

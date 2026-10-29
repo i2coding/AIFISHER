@@ -39,6 +39,23 @@ interface Props {
   hoveredPortIndex?: number | null;
   isInvalidHover?: boolean;
   selectedNodeIds: string[];
+  /** 组：把组内多个成员连到同一个下游时，合并成一条从组框出发的线。 */
+  groups?: { id: string; nodeIds: string[] }[];
+  /** Shift 抓住某条线改接时，原线先隐藏，避免看着像"又多拉了一条"。 */
+  rewiringEdge?: { parentId: string; childId: string; portIndex: number } | null;
+  /**
+   * Shift 抓住端口搬一整束连线时的预览：所有端点收成一个点跟着鼠标走。
+   * side='right' 表示从某个输出口拎起（预览从鼠标指向各下游）；
+   * side='left' 表示拎起某个节点的全部输入（预览从各上游指向鼠标）。
+   */
+  bundlePreview?: {
+    side: 'right' | 'left';
+    edges: { nodeId: string; portIndex: number }[];
+    /** 鼠标位置（画布坐标） */
+    point: { x: number; y: number };
+    /** 当前悬停的落点节点 */
+    targetId?: string | null;
+  } | null;
   visibleNodeIds?: Set<string>;
   selectedConnection?: { parentId: string; childId: string; portIndex: number } | null;
   onEdgeClick(
@@ -49,6 +66,14 @@ interface Props {
   ): void;
   onEdgeDoubleClick?(
     event: ReactTypes.MouseEvent,
+    parentId: string,
+    childId: string,
+    portIndex: number,
+    parentIds?: string[],
+  ): void;
+  /** 按住 Shift 抓住连线某一端，把这条线改接到别的节点上。 */
+  onEdgeShiftDown?(
+    event: ReactTypes.PointerEvent,
     parentId: string,
     childId: string,
     portIndex: number,
@@ -66,6 +91,9 @@ interface ResolvedEdge {
   portIndex: number;
   key: string;
   curve: Curve;
+  /** 组连线：该组连同到下游的全部成员 id（源自同一个组，画成一条线）。 */
+  parentIds?: string[];
+  groupId?: string;
 }
 type RenderedEdge = ResolvedEdge & { path: string; length: number; phase: number };
 
@@ -279,6 +307,57 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
   const zoom = Number.isFinite(viewport.zoom) && viewport.zoom > 0 ? viewport.zoom : 1;
   const width = props.viewportSize?.width ?? window.innerWidth,
     height = props.viewportSize?.height ?? window.innerHeight;
+  const bundleTemp = React.useMemo(() => {
+    const preview = props.bundlePreview;
+    if (!preview) return null;
+    // 悬停到目标节点时，整束线先吸到目标的端口上，让"会接到哪"一眼可见。
+    const target = preview.targetId ? byId.get(preview.targetId) : undefined;
+    const targetSize = target ? geometryCache.size(target) : null;
+    const anchor = target && targetSize
+      ? preview.side === 'right'
+        ? {
+            x: getPortX(target, 'right', targetSize.width),
+            y: getPortY(target, 'right', 0, targetSize.height),
+          }
+        : {
+            x: getPortX(target, 'left', targetSize.width),
+            y: getPortY(target, 'left', 0, targetSize.height),
+          }
+      : preview.point;
+    return preview.edges.flatMap((item) => {
+      const node = byId.get(item.nodeId);
+      if (!node) return [];
+      const size = geometryCache.size(node);
+      const curve: Curve =
+        preview.side === 'right'
+          ? {
+              start: target ? anchor : preview.point,
+              end: {
+                x: getPortX(node, 'left', size.width),
+                y: getPortY(node, 'left', 0, size.height),
+              },
+            }
+          : {
+              start: {
+                x: getPortX(node, 'right', size.width),
+                y: getPortY(node, 'right', item.portIndex, size.height),
+              },
+              end: target ? anchor : preview.point,
+            };
+      return [
+        <g key={`bundle-${item.nodeId}-${item.portIndex}`} className="pointer-events-none">
+          <path d={edgePath(curve)} stroke="var(--af-edge-halo)" strokeWidth="6" fill="none" />
+          <path
+            d={edgePath(curve)}
+            stroke={target ? 'var(--af-focus)' : 'var(--af-edge)'}
+            strokeWidth="2.2"
+            fill="none"
+          />
+        </g>,
+      ];
+    });
+  }, [props.bundlePreview, byId, geometryCache, getPortX, getPortY]);
+
   const edges = React.useMemo(() => {
     const bounds = {
       left: -viewport.x / zoom - 800,
@@ -286,26 +365,96 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
       right: (width - viewport.x) / zoom + 800,
       bottom: (height - viewport.y) / zoom + 800,
     };
-    return nodes.flatMap((child) =>
-      (child.parentIds || []).flatMap((parentId, portIndex) => {
+    const visible = (curve: Curve) => {
+      // A long edge can cross the viewport while both endpoint cards are outside it.
+      const horizontal = Math.abs(curve.end.x - curve.start.x) / 2;
+      return !(
+        Math.max(curve.start.x + horizontal, curve.end.x) < bounds.left ||
+        Math.min(curve.start.x, curve.end.x - horizontal) > bounds.right ||
+        Math.max(curve.start.y, curve.end.y) < bounds.top ||
+        Math.min(curve.start.y, curve.end.y) > bounds.bottom
+      );
+    };
+    const groupByNode = new Map<string, string>();
+    for (const group of props.groups ?? []) {
+      if ((group.nodeIds?.length ?? 0) < 2) continue;
+      for (const id of group.nodeIds) groupByNode.set(id, group.id);
+    }
+    // 同一个组的多个成员连到同一个下游节点时，只画一条"组 → 下游"的线。
+    const batches = new Map<string, { child: EdgeNode; portIndex: number; parents: string[] }>();
+    const singles: { parent: EdgeNode; child: EdgeNode; portIndex: number }[] = [];
+    for (const child of nodes) {
+      (child.parentIds || []).forEach((parentId, portIndex) => {
         const parent = parentId ? byId.get(parentId) : undefined;
-        if (!parent) return [];
-        const edge = geometryCache.resolve(parent, child, portIndex),
-          { curve } = edge;
-        // A long edge can cross the viewport while both endpoint cards are outside it.
-        const horizontal = Math.abs(curve.end.x - curve.start.x) / 2;
-        if (
-          Math.max(curve.start.x + horizontal, curve.end.x) < bounds.left ||
-          Math.min(curve.start.x, curve.end.x - horizontal) > bounds.right ||
-          Math.max(curve.start.y, curve.end.y) < bounds.top ||
-          Math.min(curve.start.y, curve.end.y) > bounds.bottom
-        )
-          return [];
-        return [geometryCache.render(edge)];
-      }),
-    );
-  }, [nodes, byId, geometryCache, viewport.x, viewport.y, zoom, width, height]);
+        if (!parent) return;
+        const groupId = groupByNode.get(parent.id);
+        if (!groupId) {
+          singles.push({ parent, child, portIndex });
+          return;
+        }
+        const key = `${groupId}|${child.id}`;
+        const bucket = batches.get(key);
+        if (!bucket) batches.set(key, { child, portIndex, parents: [parent.id] });
+        else if (!bucket.parents.includes(parent.id)) bucket.parents.push(parent.id);
+      });
+    }
+    /** 组框与 canvasSelectionBounds 保持一致：成员包围盒四周各留 50。 */
+    const GROUP_PADDING = 50;
+    const groupBoxOf = (parentIds: readonly string[]) => {
+      let left = Infinity,
+        top = Infinity,
+        right = -Infinity,
+        bottom = -Infinity;
+      for (const id of parentIds) {
+        const node = byId.get(id);
+        if (!node) continue;
+        const size = geometryCache.size(node);
+        left = Math.min(left, node.x);
+        top = Math.min(top, node.y);
+        right = Math.max(right, node.x + size.width);
+        bottom = Math.max(bottom, node.y + size.height);
+      }
+      if (![left, top, right, bottom].every(Number.isFinite)) return null;
+      return { left, top, right, bottom };
+    };
+    const resolved: RenderedEdge[] = [];
+    const push = (edge: ResolvedEdge) => {
+      if (!visible(edge.curve)) return;
+      resolved.push(geometryCache.render(edge));
+    };
+    for (const single of singles)
+      push(geometryCache.resolve(single.parent, single.child, single.portIndex));
+    for (const [key, bucket] of batches) {
+      const groupId = key.slice(0, key.lastIndexOf('|')),
+        box = groupBoxOf(bucket.parents);
+      // 只有一个成员连到它，不是"组连线"，按普通线画。
+      if (bucket.parents.length < 2 || !box) {
+        const parent = byId.get(bucket.parents[0]);
+        if (parent) push(geometryCache.resolve(parent, bucket.child, bucket.portIndex));
+        continue;
+      }
+      const childSize = geometryCache.size(bucket.child);
+      push({
+        parentId: bucket.parents[0],
+        childId: bucket.child.id,
+        portIndex: -1,
+        key: `group:${groupId}:${bucket.child.id}`,
+        groupId,
+        parentIds: bucket.parents,
+        curve: {
+          start: { x: box.right + GROUP_PADDING, y: (box.top + box.bottom) / 2 },
+          end: {
+            x: geometry.getPortX(bucket.child, 'left', childSize.width),
+            y: geometry.getPortY(bucket.child, 'left', bucket.portIndex, childSize.height),
+          },
+          side: 'right',
+        },
+      });
+    }
+    return resolved;
+  }, [nodes, byId, geometryCache, viewport.x, viewport.y, zoom, width, height, props.groups]);
   const temporary =
+    !props.bundlePreview &&
     props.isDraggingConnection && props.connectionStart && props.tempConnectionEnd
       ? [
           ...new Set(
@@ -357,7 +506,8 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
                       : 'var(--af-edge)'
                 }
                 strokeWidth="2"
-                strokeDasharray="5,5"
+                // 改接时画成实线：看起来是把原来那条线拖走，而不是又拉了一条新的。
+                strokeDasharray={props.rewiringEdge ? undefined : '5,5'}
                 fill="none"
                 className="pointer-events-none"
               />
@@ -391,6 +541,14 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
         </filter>
       </defs>
       {edges.map((edge, edgeIndex) => {
+        // Shift 改接期间把原线藏起来，只留下跟着鼠标走的那一条。
+        if (
+          props.rewiringEdge &&
+          props.rewiringEdge.parentId === edge.parentId &&
+          props.rewiringEdge.childId === edge.childId &&
+          props.rewiringEdge.portIndex === edge.portIndex
+        )
+          return null;
         const chosen =
           selectedConnection?.parentId === edge.parentId &&
           selectedConnection.childId === edge.childId &&
@@ -410,11 +568,28 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
           <g
             key={edge.key}
             data-edge-key={`${edge.parentId}-${edge.childId}-${edge.portIndex}`}
+            data-fisherai-edge-parent={edge.parentId}
+            data-fisherai-edge-child={edge.childId}
+            data-fisherai-edge-port={edge.portIndex}
+            data-fisherai-edge-parents={edge.parentIds?.join(' ')}
+            data-fisherai-edge-group={edge.groupId}
             onClick={(event) =>
               props.onEdgeClick(event, edge.parentId, edge.childId, edge.portIndex)
             }
+            onPointerDown={(event) => {
+              if (!event.shiftKey || event.button !== 0 || !props.onEdgeShiftDown) return;
+              event.stopPropagation();
+              event.preventDefault();
+              props.onEdgeShiftDown(event, edge.parentId, edge.childId, edge.portIndex);
+            }}
             onDoubleClick={(event) =>
-              props.onEdgeDoubleClick?.(event, edge.parentId, edge.childId, edge.portIndex)
+              props.onEdgeDoubleClick?.(
+                event,
+                edge.parentId,
+                edge.childId,
+                edge.portIndex,
+                edge.parentIds,
+              )
             }
             onMouseEnter={() => setHovered(edge.key)}
             onMouseLeave={() => setHovered((current) => (current === edge.key ? null : current))}
@@ -483,6 +658,7 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
         );
       })}
       {temporary}
+      {bundleTemp}
     </>
   );
 }
