@@ -338,6 +338,7 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
             nodes={nodes}
             viewport={viewport}
             viewportSize={viewportSize}
+            isDragging={Boolean(props.isDragging)}
             isDraggingConnection={props.isDraggingConnection || props.isPendingConnection}
             connectionStart={props.connectionStart}
             tempConnectionEnd={props.tempConnectionEnd}

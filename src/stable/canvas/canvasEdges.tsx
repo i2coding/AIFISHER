@@ -77,6 +77,12 @@ interface Props {
     portIndex: number,
     parentIds?: string[],
   ): void;
+  /**
+   * 正在拖动节点或组框。拖动期间关掉流光特效与发光滤镜：
+   * 每条带流光的线都有自己的 requestAnimationFrame + 高斯模糊，节点一动就是
+   * "全画布重算 path + 每条高亮线跑模糊"，合成层追不上就在屏幕上留下残影。
+   */
+  isDragging?: boolean;
   /** 按住 Shift 抓住连线某一端，把这条线改接到别的节点上。 */
   onEdgeShiftDown?(
     event: ReactTypes.PointerEvent,
@@ -682,7 +688,7 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
                 <circle cx={5} cy={6} r={3.2} />
               </g>
             </g>
-            {(highlighted || over) && flowVisible && (
+            {(highlighted || over) && flowVisible && !props.isDragging && (
               <EdgeFlow
                 React={React}
                 edge={edge}
