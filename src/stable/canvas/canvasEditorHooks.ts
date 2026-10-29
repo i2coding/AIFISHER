@@ -99,7 +99,11 @@ export function useCanvasTitle(hooks: Hooks, initial = 'Untitled') {
   };
 }
 
-export function useCanvasGroups(hooks: Hooks, createId: () => string) {
+export function useCanvasGroups(
+  hooks: Hooks,
+  createId: () => string,
+  measure?: (node: CanvasGroupableNode) => { width: number; height: number },
+) {
   const adapter = installStableCanvasGroups();
   const [groups, publish] = hooks.useState<CanvasGroup[]>([]);
   const current = hooks.useRef(groups);
@@ -118,7 +122,11 @@ export function useCanvasGroups(hooks: Hooks, createId: () => string) {
       label = 'New Group',
     ) {
       const id = createId();
-      const next = adapter.group({ nodes, groups: current.current }, ids, { groupId: id, label });
+      const next = adapter.group({ nodes, groups: current.current }, ids, {
+        groupId: id,
+        label,
+        measure,
+      });
       setGroups(next.groups);
       setNodes(next.nodes);
       return id;

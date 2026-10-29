@@ -17,7 +17,9 @@ import {
   connectJoinedGroupLinks,
   dropDepartedGroupLinks,
   syncCanvasGroupMembership,
+  translateGroupFrames,
 } from './canvasGroupMembership';
+import { GROUP_FRAME_MIN_SIZE } from './canvasGroups';
 import { reattachBundle } from './canvasBundleReattach';
 import { applyCanvasPromptProposal } from '../agent/canvasPromptProposal';
 import type { PromptProposal } from '../agent/codexClient';
@@ -157,16 +159,10 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
       handleCloseResize,
     } = usePanels(),
     [batchConnecting, setBatchConnecting] = React.useState(false),
+    // 组框缩放进行中：期间不写历史，避免每一帧都记一条。
+    [groupFrameResizing, setGroupFrameResizing] = React.useState(false),
     // 从组框连接点发起批连线时，用它覆盖"按当前选中项批连"的默认来源。
     [groupBatchSourceIds, setGroupBatchSourceIds] = React.useState<string[] | null>(null),
-    // 拖动组内节点时冻结的组框：框不再跟着成员变大，节点中心跑出这个框就算离开。
-    [frozenGroupFrame, setFrozenGroupFrame] = React.useState<{
-      groupId: string;
-      left: number;
-      top: number;
-      right: number;
-      bottom: number;
-    } | null>(null),
     // Shift 改接期间要在画面上隐藏原线，所以必须是 state（ref 不会触发重渲染）。
     [rewiringEdge, setRewiringEdge] = React.useState<{
       parentId: string;
@@ -434,6 +430,30 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     [nodes, viewport, getNodeWidth, handleConnectorPointerDown],
   );
 
+  // 拖动组框期间：组框位置用"锚点节点的位移"实时推导，拖动过程中框跟着走，
+  // 松手时再由 translateGroupFrames 落到 frame 数据里（两者结果一致，不会跳）。
+  const groupDragRef = React.useRef<{
+    groupId: string;
+    anchorId: string;
+    anchorX: number;
+    anchorY: number;
+  } | null>(null);
+
+  // 拖动开始时的节点位置快照：用来判断"整组平移"（所有成员位移一致才平移组框）。
+  const dragOriginRef = React.useRef<Map<string, { x: number; y: number }> | null>(null);
+  const rememberDragOrigin = React.useCallback(() => {
+    dragOriginRef.current = new Map(nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+  }, [nodes]);
+
+  // 组框缩放：只改 frame，成员尺寸完全不动。
+  const groupResizeRef = React.useRef<{
+    groupId: string;
+    box: { left: number; top: number; width: number; height: number };
+    startX: number;
+    startY: number;
+    zoom: number;
+  } | null>(null);
+
   // Shift 抓住端口 = 把整个端口上的连线当成一束一起搬（ComfyUI 的换线手感）。
   const bundleRef = React.useRef<{
     nodeId: string;
@@ -610,52 +630,36 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     [handleConnectorPointerDown],
   );
 
-  // 拖动组内节点时把组框钉在原地：否则框会跟着被拖的节点一起变大，永远拖不出去。
-  const freezeGroupFrameFor = React.useCallback(
-    (nodeId: string) => {
-      const node = nodes.find((item) => item.id === nodeId),
-        groupId = typeof node?.groupId === 'string' ? node.groupId : undefined;
-      const members = groupId ? nodes.filter((item) => item.groupId === groupId) : [];
-      if (!groupId || members.length < 2) {
-        setFrozenGroupFrame(null);
-        return;
-      }
-      let left = Infinity,
-        top = Infinity,
-        right = -Infinity,
-        bottom = -Infinity;
-      for (const member of members) {
-        left = Math.min(left, member.x);
-        top = Math.min(top, member.y);
-        right = Math.max(right, member.x + getNodeWidth(member));
-        bottom = Math.max(bottom, member.y + getNodeHeight(member));
-      }
-      if (![left, top, right, bottom].every(Number.isFinite)) {
-        setFrozenGroupFrame(null);
-        return;
-      }
-      // 与 canvasSelectionBounds / canvasEdges 的 50px 内缩保持一致。
-      setFrozenGroupFrame({
-        groupId,
-        left: left - 50,
-        top: top - 50,
-        right: right + 50,
-        bottom: bottom + 50,
-      });
-    },
-    [nodes, getNodeWidth, getNodeHeight],
-  );
-
   // 拖动结束后结算组成员：拖进组框即加入，拖出去即离开。
   const syncGroupsAfterDrag = React.useCallback(() => {
-    const next = syncCanvasGroupMembership(
-      nodes,
-      groups,
-      { width: getNodeWidth, height: getNodeHeight },
-      frozenGroupFrame,
-    );
-    setFrozenGroupFrame(null);
-    if (!next) return;
+    const origins = dragOriginRef.current,
+      drag = groupDragRef.current;
+    dragOriginRef.current = null;
+    groupDragRef.current = null;
+    // 顺序很重要：先把组框搬到新位置，再拿它判断成员去留。反过来的话，拖整组时
+    // 框还在原地，所有成员都会被判成"出框" → 组被解散。
+    // 拖组框时用拖动期间那份同一个位移落账，保证松手瞬间框不会跳回去。
+    let framedGroups = groups;
+    const anchor = drag ? nodes.find((node) => node.id === drag.anchorId) : undefined;
+    if (drag && anchor) {
+      const dx = anchor.x - drag.anchorX,
+        dy = anchor.y - drag.anchorY;
+      framedGroups = groups.map((group) =>
+        group.id === drag.groupId && group.frame
+          ? { ...group, frame: { ...group.frame, x: group.frame.x + dx, y: group.frame.y + dy } }
+          : group,
+      );
+    } else if (origins) {
+      framedGroups = translateGroupFrames(groups, nodes, origins);
+    }
+    const next = syncCanvasGroupMembership(nodes, framedGroups, {
+      width: getNodeWidth,
+      height: getNodeHeight,
+    });
+    if (!next) {
+      if (framedGroups !== groups) setGroups(framedGroups);
+      return;
+    }
 
     // 出组的节点要跟"这一组的连线"一起断开，否则看起来它还挂在组上。
     const previousGroupIds = new Map<string, string | undefined>(
@@ -669,8 +673,86 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
 
     setNodes(updated);
     setGroups(next.groups);
-  }, [nodes, groups, getNodeWidth, getNodeHeight, frozenGroupFrame, setNodes, setGroups]);
+  }, [nodes, groups, getNodeWidth, getNodeHeight, setNodes, setGroups]);
 
+
+  // 每次渲染现算（不用 useMemo）：拖动结束清空 ref 的那一次渲染必须立刻拿到 null，
+  // 否则缓存下来的旧偏移会让框在松手瞬间被多推一次。
+  const groupDrag = groupDragRef.current;
+  const groupDragAnchor = groupDrag
+    ? nodes.find((node) => node.id === groupDrag.anchorId)
+    : undefined;
+  const groupFrameOffset =
+    groupDrag && groupDragAnchor
+      ? {
+          groupId: groupDrag.groupId,
+          dx: groupDragAnchor.x - groupDrag.anchorX,
+          dy: groupDragAnchor.y - groupDrag.anchorY,
+        }
+      : null;
+
+  // 缩放结束后要立刻结算成员（框外的出组），这里用 ref 拿到最新的回调。
+  const syncGroupsRef = React.useRef(syncGroupsAfterDrag);
+  syncGroupsRef.current = syncGroupsAfterDrag;
+
+  // 组框缩放：拖动右下角只改 frame，成员尺寸完全不动。
+  const handleGroupFrameResize = React.useCallback(
+    (
+      event: ReactTypes.PointerEvent,
+      groupId: string,
+      box: { left: number; top: number; width: number; height: number },
+    ) => {
+      event.stopPropagation();
+      event.preventDefault();
+      groupResizeRef.current = {
+        groupId,
+        box,
+        startX: event.clientX,
+        startY: event.clientY,
+        zoom: viewport.zoom > 0 ? viewport.zoom : 1,
+      };
+      setGroupFrameResizing(true);
+    },
+    [viewport.zoom],
+  );
+
+  React.useEffect(() => {
+    if (!groupFrameResizing) return;
+    const move = (event: PointerEvent) => {
+      const current = groupResizeRef.current;
+      if (!current) return;
+      const width = Math.max(
+          GROUP_FRAME_MIN_SIZE.width,
+          current.box.width + (event.clientX - current.startX) / current.zoom,
+        ),
+        height = Math.max(
+          GROUP_FRAME_MIN_SIZE.height,
+          current.box.height + (event.clientY - current.startY) / current.zoom,
+        );
+      setGroups((list) =>
+        list.map((group) =>
+          group.id === current.groupId
+            ? { ...group, frame: { x: current.box.left, y: current.box.top, width, height } }
+            : group,
+        ),
+      );
+    };
+    const finish = () => {
+      if (!groupResizeRef.current) return;
+      groupResizeRef.current = null;
+      setGroupFrameResizing(false);
+      // 缩框之后落在框外的成员要立刻出组（连带断开组下游的那条线）。
+      syncGroupsRef.current?.();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
+  }, [groupFrameResizing, setGroups]);
 
   const {
       id: localUserId,
@@ -1641,7 +1723,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     if (previous.nodes === nodes && previous.groups === groups && previous.title === canvasTitle)
       return;
     setDirty(true);
-    if (!isDragging && !isResizing && !isDraggingConnection && !isSelecting) {
+    if (!isDragging && !isResizing && !isDraggingConnection && !isSelecting && !groupFrameResizing) {
       pushHistory({ nodes, groups });
     }
     const ke = nodes.filter((ot) => ot.status === NodeStatus.LOADING).length;
@@ -1663,6 +1745,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     isResizing,
     isDraggingConnection,
     isSelecting,
+    groupFrameResizing,
     pushHistory,
     save,
   ]);
@@ -1873,8 +1956,8 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         onEdgeDoubleClick,
         onEdgeShiftDown: startEdgeRewire,
         rewiringEdge,
-        frozenGroupFrame,
         bundlePreview,
+        groupFrameOffset,
         onGroupBatchConnectorDown: startGroupConnection,
         onGroup: (ke: string[]) => groupNodes(ke, nodes, setNodes),
         onUngroup: (ke: string) => ungroupNodes(ke, nodes, setNodes),
@@ -1901,7 +1984,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           if (!(ke.shiftKey || ke.ctrlKey || ke.metaKey)) {
             setSelectedConnection(null);
           }
-          freezeGroupFrameFor(st);
+          rememberDragOrigin();
           handleNodePointerDown(ke, st, void 0);
         },
         onNodeContextMenu: handleNodeContextMenu,
@@ -1910,7 +1993,16 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           setSelectedConnection(null);
         },
         onGroupPointerDown: (ke: ReactTypes.PointerEvent<HTMLDivElement>, st: string[]) => {
-          setFrozenGroupFrame(null);
+          rememberDragOrigin();
+          const anchorId = st[0],
+            anchor = anchorId ? nodes.find((node) => node.id === anchorId) : undefined;
+          const group = st.length
+            ? groups.find((candidate) => candidate.nodeIds.includes(anchorId))
+            : undefined;
+          groupDragRef.current =
+            group && anchor
+              ? { groupId: group.id, anchorId, anchorX: anchor.x, anchorY: anchor.y }
+              : null;
           const ht = window.__FISHERAI_CANVAS_SELECTION__;
           if (ht) {
             setSelectedNodeIds(ht.selectGroup(selectedNodeIds, st, ke));
@@ -1948,6 +2040,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
           ot: CanvasNodeFrame[],
         ) => startSelectionResize(ke, st, ot),
         onSelectionBatchConnectorDown: startBatchConnection,
+        onGroupResizeStart: handleGroupFrameResize,
         onNodeUpload: replaceMedia,
         onExpand: handleExpandImage,
         onDragStart: handleNodeDragStart,

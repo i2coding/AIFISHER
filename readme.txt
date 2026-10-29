@@ -194,8 +194,23 @@ Shift 换线（对标 ComfyUI 的换线手感，两种粒度）
   从组框右边缘中点出发的线（portIndex 记为 -1，并带 data-fisherai-edge-parents）。
   ⚠ 这条视觉线背后是多条数据连接：剪断（canvasCutMode.readEdges）和双击删除
   都会按 parents 逐个断开，改这两处时别只断第一个 parentId。
-  组框右下角另有缩放柄（data-fisherai-group-resize-handle），复用多选缩放，
-  按比例缩放全部成员。
+  拖动体验：拖组框时，框的位置在渲染期由"锚点节点位移"实时推导
+  （canvasApplication.groupDragRef → groupFrameOffset → Selection/Edges），
+  松手时用同一个位移写回 frame —— 所以拖动全程框跟着走，且落账后不会跳。
+  ⚠ 这个偏移不能缓存（别用 useMemo）：清空 ref 的那一次渲染必须立刻变成 null，
+  否则旧偏移会让框在松手瞬间再推一次。
+  渲染坑：选中整个组时走的是"多选"那条分支，它以前没带 frameOverride，会退回
+  按成员包围盒算框 → 一选中的瞬间框就缩小、组连线看着连在框外。现在两条分支
+  （选中组 / 未选中组）都从 group.frame 取框。
+  顺序坑：整组拖动时**必须先平移组框、再判成员去留**。反过来的话框还在原地，
+  所有成员都被判成"出框"→ 组被解散（曾真实发生过：拖动后组直接消失）。
+  缩框松手时会立刻结算一次成员：落在框外的成员出组并断开组下游的线；
+  若只剩 1 个成员，按既有规则（组至少 2 个成员）解散。
+  组框是**独立存的一份数据**（CanvasGroup.frame），创建组时按成员包围盒外扩
+  GROUP_FRAME_PADDING 算一次，之后只由右下角的缩放柄（data-fisherai-group-resize-handle）
+  改它 —— 缩放只动框，成员图片尺寸完全不变（早期复用多选缩放会把图一起放大，
+  用户明确否掉了）。整组拖动时 translateGroupFrames 把框一起平移；拖单个成员时
+  框不动。旧数据没有 frame 的会在下次同步时补一份并写回。
 
   成员进出组的一个坑（踩过两次）：组框是由成员包围盒算出来的，所以
    - 拖动中框会跟着被拖的节点一起变大 → 永远拖不出去；

@@ -1,15 +1,31 @@
 export interface CanvasGroupableNode {
   id: string;
   groupId?: string;
+  x?: number;
+  y?: number;
   [key: string]: unknown;
+}
+
+/** 组框，独立于成员保存：缩放组框不会改变成员的尺寸。 */
+export interface CanvasGroupFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface CanvasGroup {
   id: string;
   nodeIds: string[];
   label: string;
+  /** 组框位置尺寸（画布坐标）；旧数据没有这个字段时会按成员包围盒补一份。 */
+  frame?: CanvasGroupFrame;
   [key: string]: unknown;
 }
+
+/** 组框相对成员包围盒的外扩量，画布单位。 */
+export const GROUP_FRAME_PADDING = 50;
+export const GROUP_FRAME_MIN_SIZE = { width: 220, height: 180 };
 
 export interface CanvasGroupState<
   TNode extends CanvasGroupableNode = CanvasGroupableNode,
@@ -22,6 +38,8 @@ export interface CanvasGroupState<
 export interface GroupCanvasNodesOptions {
   groupId: string;
   label?: string;
+  /** 量出节点尺寸，用来给新组算一个初始组框。 */
+  measure?(node: CanvasGroupableNode): { width: number; height: number };
 }
 
 export interface StableCanvasGroupsAdapter {
@@ -89,6 +107,33 @@ export function groupCanvasNodes<
   ];
   if (nextNodeIds.length < 2) return state;
 
+  // 新组框 = 成员包围盒外扩一圈；量不出尺寸时留空，读取侧会补算。
+  let initialFrame: CanvasGroupFrame | undefined;
+  if (options.measure) {
+    let left = Infinity,
+      top = Infinity,
+      right = -Infinity,
+      bottom = -Infinity;
+    for (const node of state.nodes) {
+      if (!nextNodeIds.includes(node.id)) continue;
+      const x = Number(node.x),
+        y = Number(node.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const size = options.measure(node);
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x + Math.max(0, size.width));
+      bottom = Math.max(bottom, y + Math.max(0, size.height));
+    }
+    if ([left, top, right, bottom].every(Number.isFinite))
+      initialFrame = {
+        x: left - GROUP_FRAME_PADDING,
+        y: top - GROUP_FRAME_PADDING,
+        width: right - left + GROUP_FRAME_PADDING * 2,
+        height: bottom - top + GROUP_FRAME_PADDING * 2,
+      };
+  }
+
   const selectedNodeIdSet = new Set(nextNodeIds);
   const collapsedGroupIds = new Set<string>();
   const nextGroups: TGroup[] = [];
@@ -111,6 +156,7 @@ export function groupCanvasNodes<
     id: options.groupId,
     nodeIds: nextNodeIds,
     label: options.label ?? 'New Group',
+    ...(initialFrame ? { frame: initialFrame } : {}),
   } as TGroup);
 
   return {

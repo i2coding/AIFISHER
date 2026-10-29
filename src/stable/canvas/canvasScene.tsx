@@ -17,7 +17,34 @@ type Runtime = Pick<
 >;
 interface Group {
   id: string;
+  frame?: { x: number; y: number; width: number; height: number };
   [key: string]: unknown;
+}
+
+type GroupResizeHandler = (
+  event: ReactTypes.PointerEvent,
+  groupId: string,
+  box: { left: number; top: number; width: number; height: number },
+) => void;
+
+/** 拖动组框期间的临时位移：让框在拖动过程中就跟着手指走，而不是松手才跳。 */
+type GroupFrameOffset = { groupId: string; dx: number; dy: number } | null;
+
+/** 读组自己存的框；没有就返回 null，交给调用方按成员包围盒兜底。 */
+function groupFrameBox(
+  group: Group | null | undefined,
+  offset?: GroupFrameOffset,
+) {
+  const frame = group?.frame;
+  if (!frame) return null;
+  const x = Number(frame.x),
+    y = Number(frame.y),
+    width = Number(frame.width),
+    height = Number(frame.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  const dx = offset && offset.groupId === group?.id ? offset.dx : 0,
+    dy = offset && offset.groupId === group?.id ? offset.dy : 0;
+  return { left: x + dx, top: y + dy, right: x + width + dx, bottom: y + height + dy };
 }
 interface Props extends Record<string, unknown> {
   documentEpoch?: number;
@@ -236,10 +263,6 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
       observer.disconnect();
     };
   }, [canvasRef, documentEpoch]);
-  // 拖动组内节点期间钉住的组框（由 canvasApplication 在按下节点时冻结）。
-  const frozenGroupFrame = props.frozenGroupFrame as
-    | { groupId: string; left: number; top: number; right: number; bottom: number }
-    | null;
   // 组框上的连接点：把整组成员当成一个输出，直接连到下游节点。
   const groupConnectorDown = props.onGroupBatchConnectorDown as
     | ((
@@ -260,6 +283,24 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
     isDragging: props.isDragging,
     isPanning: props.isPanning,
   };
+  // 选中一整个组时，外框必须继续用组自己存的那份 frame —— 否则会退化成"按成员
+  // 包围盒算"，框会在选中的瞬间缩小，组连线看着像连在框外的空气上。
+  const selectionGroup =
+    selectedNodeIds.length > 1
+      ? (props.getCommonGroup(selectedNodeIds) as Group | null)
+      : null;
+  const groupFrameOffset = props.groupFrameOffset as GroupFrameOffset;
+  // 谁的输出口已经有线了（组框连接点据此显示实心/空心）。
+  const parentsWithChildren = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const node of nodes)
+      for (const parentId of node.parentIds ?? []) if (parentId) set.add(parentId);
+    return set;
+  }, [nodes]);
+  const connectorStateOf = (list: readonly { id: string; parentIds?: string[] }[]) => ({
+    left: list.some((node) => (node.parentIds ?? []).some(Boolean)),
+    right: list.some((node) => parentsWithChildren.has(node.id)),
+  });
   const callbacks = Object.fromEntries(forwardedCallbacks.map((name) => [name, actions[name]]));
   const { Edges, Selection } = components;
   return (
@@ -312,6 +353,7 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
             onEdgeDoubleClick={props.onEdgeDoubleClick}
             onEdgeShiftDown={props.onEdgeShiftDown}
             groups={allGroups as { id: string; nodeIds: string[] }[]}
+            groupFrameOffset={groupFrameOffset}
             rewiringEdge={
               props.rewiringEdge as
                 | { parentId: string; childId: string; portIndex: number }
@@ -333,7 +375,10 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
           <Selection
             {...selectionProps}
             selectedNodes={selectedNodes}
-            group={props.getCommonGroup(selectedNodeIds)}
+            group={selectionGroup}
+            frameOverride={groupFrameBox(selectionGroup, groupFrameOffset)}
+            batchConnectorConnected={connectorStateOf(selectedNodes)}
+            onGroupResizeStart={props.onGroupResizeStart as GroupResizeHandler | undefined}
             onGroup={() => props.onGroup(selectedNodeIds)}
             onUngroup={() => {
               const group = props.getCommonGroup(selectedNodeIds);
@@ -371,12 +416,9 @@ export function CanvasScene(React: Runtime, props: Props, components: Components
                 }
               }}
               isSelected={false}
-              frameOverride={
-                frozenGroupFrame && frozenGroupFrame.groupId === group.id
-                  ? frozenGroupFrame
-                  : null
-              }
-              onSelectionResizeStart={props.onSelectionResizeStart}
+              frameOverride={groupFrameBox(group, groupFrameOffset)}
+              batchConnectorConnected={connectorStateOf(members)}
+              onGroupResizeStart={props.onGroupResizeStart as GroupResizeHandler | undefined}
               onBatchConnectorDown={
                 groupConnectorDown
                   ? (event: ReactTypes.PointerEvent, side: 'left' | 'right') =>

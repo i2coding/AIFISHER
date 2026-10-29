@@ -26,8 +26,16 @@ interface Props {
   showGridSlider?: boolean;
   gridColumns?: number;
   isSelected?: boolean;
-  /** 拖动组内节点时钉住的组框（不再随成员包围盒变化）。 */
+  /** 组自己存的框（不再随成员包围盒变化）。 */
   frameOverride?: { left: number; top: number; right: number; bottom: number } | null;
+  /** 组框连接点是否已经有连线（用来做空心/实心）。 */
+  batchConnectorConnected?: { left: boolean; right: boolean };
+  /** 拖动组框右下角：只改组框，不动成员尺寸。 */
+  onGroupResizeStart?(
+    event: ReactTypes.PointerEvent,
+    groupId: string,
+    box: { left: number; top: number; width: number; height: number },
+  ): void;
   isDragging?: boolean;
   isPanning?: boolean;
   onBatchConnectorDown?(event: ReactTypes.PointerEvent, side: 'left' | 'right'): void;
@@ -48,6 +56,8 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
     gridColumns,
     isSelected,
     frameOverride,
+    batchConnectorConnected,
+    onGroupResizeStart,
     isDragging,
     isPanning = false,
     onBatchConnectorDown,
@@ -165,13 +175,20 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
         top: boxTop,
         width: width,
         height: height,
-        border: isGroup ? `2px solid ${borderColor}` : `2px dashed ${borderColor}`,
-        borderRadius: '12px',
+        border: isGroup
+          ? `2px solid ${isSelected ? accent : 'rgba(148,163,184,0.55)'}`
+          : `1.5px dashed ${borderColor}`,
+        borderRadius: isGroup ? '16px' : '12px',
         backgroundColor: isGroup
           ? isSelected
-            ? 'rgba(59, 130, 246, 0.15)'
-            : 'rgba(68, 68, 68, 0.22)'
+            ? 'rgba(59,130,246,0.15)'
+            : 'rgba(68,68,68,0.22)'
           : 'transparent',
+        boxShadow: isGroup
+          ? isSelected
+            ? '0 16px 40px rgba(15,23,42,0.16)'
+            : '0 12px 30px rgba(15,23,42,0.08)'
+          : undefined,
         zIndex: 5,
       }}
       onPointerDown={(event) => {
@@ -180,6 +197,22 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
         }
       }}
     >
+      {/* 双实线的第二道：内嵌一圈，和外面那圈留 4px 间隙 */}
+      {isGroup && (
+        <div
+          aria-hidden={'true'}
+          data-fisherai-group-frame-inner={'true'}
+          className={'absolute pointer-events-none'}
+          style={{
+            inset: 4,
+            borderRadius: 12,
+            border: `1.5px solid ${
+              isSelected ? 'rgba(59,130,246,0.45)' : 'rgba(148,163,184,0.38)'
+            }`,
+            backgroundColor: 'transparent',
+          }}
+        />
+      )}
       {!isGroup &&
         [
           { pos: 'top-left', cursor: 'nw-resize', top: -4, left: -4 },
@@ -236,26 +269,37 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
             key={event.pos}
           />
         ))}
-      {/* 组框右下角的缩放柄：拖动按比例缩放整组成员。 */}
-      {isGroup && onSelectionResizeStart && !isDragging && (
+      {/* 组框右下角的缩放柄：只改组框本身，成员尺寸不动。 */}
+      {isGroup && group && onGroupResizeStart && !isDragging && (
         <div
           data-fisherai-group-resize-handle={'true'}
           aria-label={'缩放整组'}
           title={'拖动缩放整组'}
           className={
-            'absolute rounded-sm border bg-[var(--af-primary)] pointer-events-auto z-20'
+            'absolute border bg-[var(--af-primary)] pointer-events-auto z-20 transition-transform duration-150 hover:scale-110'
           }
           style={{
-            width: 14,
-            height: 14,
-            right: -7,
-            bottom: -7,
+            width: 16,
+            height: 16,
+            right: -8,
+            bottom: -8,
+            borderRadius: 5,
             cursor: 'nwse-resize',
             borderColor: borderColor,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.28)',
             transform: `scale(${controlScale})`,
             transformOrigin: 'center',
           }}
-          onPointerDown={(event) => resizeSelection(event, 'bottom-right')}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            event.preventDefault();
+            onGroupResizeStart(event, group.id, {
+              left: boxLeft,
+              top: boxTop,
+              width,
+              height,
+            });
+          }}
         />
       )}
       {/* 组框和多选都提供连接点：把整组成员当成一个输出，直接连到下游。 */}
@@ -263,36 +307,64 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
         !isDragging &&
         (isGroup || (isSelected && selectedNodes.length > 1)) &&
         [
-          { side: 'left' as const, label: '整组输入连线', position: { left: -17 } },
-          { side: 'right' as const, label: '整组输出连线', position: { right: -17 } },
-        ].map((connector) => (
-          <div
-            key={connector.side}
-            className={'absolute z-20 flex items-center justify-center pointer-events-auto'}
-            style={{
-              width: 34,
-              height: 34,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              ...connector.position,
-            }}
-          >
-            <button
-              type={'button'}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-                event.preventDefault();
-                onBatchConnectorDown(event, connector.side);
+          { side: 'left' as const, label: '整组输入连线', position: { left: -31 } },
+          { side: 'right' as const, label: '整组输出连线', position: { right: -31 } },
+        ].map((connector) => {
+          const connected =
+            connector.side === 'left'
+              ? batchConnectorConnected?.left === true
+              : batchConnectorConnected?.right === true;
+          const accent = 'var(--af-primary)';
+          return (
+            <div
+              key={connector.side}
+              className={'absolute z-20 flex items-center justify-center pointer-events-auto'}
+              style={{
+                width: 62,
+                height: 62,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                ...connector.position,
               }}
-              title={connector.label}
-              aria-label={connector.label}
-              className={
-                'w-3.5 h-3.5 rounded-full border-2 cursor-crosshair transition-all duration-150 hover:scale-125 focus-visible:scale-125 border-[var(--af-border-control)] bg-[var(--af-surface)] hover:border-[var(--af-text-secondary)] hover:bg-[var(--af-text-secondary)]'
-              }
-              style={{ transformOrigin: 'center' }}
-            />
-          </div>
-        ))}
+            >
+              <button
+                type={'button'}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  event.preventDefault();
+                  onBatchConnectorDown(event, connector.side);
+                }}
+                title={connector.label}
+                aria-label={connector.label}
+                aria-pressed={connected}
+                data-fisherai-group-connector={connector.side}
+                data-fisherai-group-connector-connected={connected ? 'true' : 'false'}
+                className={
+                  'group/dot relative flex items-center justify-center rounded-full border-2 transition-all duration-150 ease-out cursor-crosshair hover:scale-[1.08] focus-visible:scale-[1.08] focus-visible:outline-none'
+                }
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderColor: connected ? accent : 'var(--af-border-control)',
+                  background: 'var(--af-surface)',
+                  boxShadow: connected
+                    ? '0 0 0 4px rgba(59,130,246,0.16), 0 4px 14px rgba(0,0,0,0.28)'
+                    : '0 0 0 4px rgba(0,0,0,0.12), 0 4px 14px rgba(0,0,0,0.26)',
+                }}
+              >
+                <span
+                  className={'block rounded-full transition-all duration-150'}
+                  style={{
+                    width: connected ? 16 : 10,
+                    height: connected ? 16 : 10,
+                    background: connected ? accent : 'var(--af-text-muted)',
+                    opacity: connected ? 1 : 0.55,
+                  }}
+                />
+              </button>
+            </div>
+          );
+        })}
       {isGroup && group && (
         <div
           data-fisherai-group-title={'true'}
@@ -304,11 +376,12 @@ export function CanvasSelectionBounds(React: Runtime, props: Props, measure: Nod
             transformOrigin: 'bottom left',
             display: 'inline-grid',
             alignItems: 'center',
-            padding: '4px 10px',
-            border: 'none',
-            borderRadius: '8px',
+            padding: '5px 11px 5px 9px',
+            border: '1px solid rgba(148,163,184,0.5)',
+            borderLeft: `3px solid ${accent}`,
+            borderRadius: '10px',
             backgroundColor: 'var(--af-surface)',
-            boxShadow: '0 10px 28px rgba(0,0,0,.42)',
+            boxShadow: '0 8px 22px rgba(15,23,42,0.18)',
           }}
         >
           <span

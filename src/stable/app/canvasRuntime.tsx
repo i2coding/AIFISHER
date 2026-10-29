@@ -95,7 +95,11 @@ const dependencies: Dependencies = {
       (node) => Rules.nodeWidth(node as CanvasNode),
       (node, parent) => Rules.nodeHeight(node as CanvasNode, parent as CanvasNode | undefined),
     ),
-  useGroups: () => Editor.useCanvasGroups(React, createId),
+  useGroups: () =>
+    Editor.useCanvasGroups(React, createId, (node) => ({
+      width: Rules.nodeWidth(node as CanvasNode),
+      height: Rules.nodeHeight(node as CanvasNode),
+    })),
   useEdgePan: optionsHook((options: Parameters<typeof Editor.useCanvasEdgePan>[1]) =>
     Editor.useCanvasEdgePan(React, options),
   ),

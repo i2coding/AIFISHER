@@ -39,8 +39,14 @@ interface Props {
   hoveredPortIndex?: number | null;
   isInvalidHover?: boolean;
   selectedNodeIds: string[];
+  /** 拖动组框期间的临时位移，让组合线起点跟着框一起走。 */
+  groupFrameOffset?: { groupId: string; dx: number; dy: number } | null;
   /** 组：把组内多个成员连到同一个下游时，合并成一条从组框出发的线。 */
-  groups?: { id: string; nodeIds: string[] }[];
+  groups?: {
+    id: string;
+    nodeIds: string[];
+    frame?: { x: number; y: number; width: number; height: number };
+  }[];
   /** Shift 抓住某条线改接时，原线先隐藏，避免看着像"又多拉了一条"。 */
   rewiringEdge?: { parentId: string; childId: string; portIndex: number } | null;
   /**
@@ -376,9 +382,27 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
       );
     };
     const groupByNode = new Map<string, string>();
+    // 组框优先用组自己存的那份（可以手动缩放），没有才按成员包围盒兜底。
+    const groupFrames = new Map<string, { left: number; top: number; right: number; bottom: number }>();
     for (const group of props.groups ?? []) {
       if ((group.nodeIds?.length ?? 0) < 2) continue;
       for (const id of group.nodeIds) groupByNode.set(id, group.id);
+      const frame = group.frame;
+      if (!frame) continue;
+      const x = Number(frame.x),
+        y = Number(frame.y),
+        width = Number(frame.width),
+        height = Number(frame.height);
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) continue;
+      const offset = props.groupFrameOffset,
+        dx = offset && offset.groupId === group.id ? offset.dx : 0,
+        dy = offset && offset.groupId === group.id ? offset.dy : 0;
+      groupFrames.set(group.id, {
+        left: x + dx,
+        top: y + dy,
+        right: x + width + dx,
+        bottom: y + height + dy,
+      });
     }
     // 同一个组的多个成员连到同一个下游节点时，只画一条"组 → 下游"的线。
     const batches = new Map<string, { child: EdgeNode; portIndex: number; parents: string[] }>();
@@ -426,7 +450,7 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
       push(geometryCache.resolve(single.parent, single.child, single.portIndex));
     for (const [key, bucket] of batches) {
       const groupId = key.slice(0, key.lastIndexOf('|')),
-        box = groupBoxOf(bucket.parents);
+        box = groupFrames.get(groupId) ?? groupBoxOf(bucket.parents);
       // 只有一个成员连到它，不是"组连线"，按普通线画。
       if (bucket.parents.length < 2 || !box) {
         const parent = byId.get(bucket.parents[0]);
@@ -442,7 +466,10 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
         groupId,
         parentIds: bucket.parents,
         curve: {
-          start: { x: box.right + GROUP_PADDING, y: (box.top + box.bottom) / 2 },
+          start: {
+            x: groupFrames.has(groupId) ? box.right : box.right + GROUP_PADDING,
+            y: (box.top + box.bottom) / 2,
+          },
           end: {
             x: geometry.getPortX(bucket.child, 'left', childSize.width),
             y: geometry.getPortY(bucket.child, 'left', bucket.portIndex, childSize.height),
@@ -452,7 +479,18 @@ export function CanvasEdges(React: Runtime, props: Props, geometry: Geometry) {
       });
     }
     return resolved;
-  }, [nodes, byId, geometryCache, viewport.x, viewport.y, zoom, width, height, props.groups]);
+  }, [
+    nodes,
+    byId,
+    geometryCache,
+    viewport.x,
+    viewport.y,
+    zoom,
+    width,
+    height,
+    props.groups,
+    props.groupFrameOffset,
+  ]);
   const temporary =
     !props.bundlePreview &&
     props.isDraggingConnection && props.connectionStart && props.tempConnectionEnd

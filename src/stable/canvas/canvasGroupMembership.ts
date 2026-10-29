@@ -4,13 +4,16 @@
  * 只在一次拖动结束时结算一次，不在拖动过程中改数据 —— 拖动中改 nodeIds 会让
  * 组框每帧改变大小，手感会抖。
  *
- * 关键点：组框本身是由成员包围盒算出来的，所以不能拿"当前组框"判断成员是否离开
- * （拖一个成员走，框跟着走，永远出不去）。这里用两种依据：
- *  1. 拖动开始时冻结的组框（frozen）：节点的中心点跑出这个"拖之前"的框就算离开。
- *     这是主判据，符合"把节点拖出框外"的直觉。
- *  2. 没有冻结框时退化成"到组内其他节点的矩形距离"。
- * 保留 STAY 阈值是为了兼容整组平移等场景（成员之间相对位置不变，没人会掉出去）。
+ * 组框（group.frame）是**独立存的一份**，可以手动缩放、不随成员移动而改变。
+ * 因此成员去留直接看"节点中心是否在组框里"：
+ *  - 拖出框 → 离开；拖进框 → 加入；框不会因为成员移动而变大，所以出得去。
+ *  - 整组平移时由 translateGroupFrames 把框一起搬走。
+ * 历史教训：早期用"按成员算包围盒"再判离组，会自我指涉（框跟着被拖的节点变大，
+ * 永远出不去）；后来又用"到其他成员的距离"判退组，把相距较远的正常组员判成离组，
+ * 导致刚打好的组在下次拖动后自动散开。这两条都不要退回去。
  */
+import { GROUP_FRAME_PADDING } from './canvasGroups';
+
 export interface MembershipNode {
   id: string;
   x: number;
@@ -30,21 +33,8 @@ export interface MembershipMeasurer<TNode extends MembershipNode> {
   height(node: TNode): number;
 }
 
-/** 拖动开始时冻结的组框（画布坐标）。 */
-export interface FrozenGroupFrame {
-  groupId: string;
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
 /** 组只剩下一个成员时不再算组，直接解散。 */
 const MIN_MEMBERS = 2;
-/** 拖进来：和组内任一节点的矩形距离小于这个值就加入。 */
-const JOIN_DISTANCE = 110;
-/** 拖出去（没有冻结框时）：超过这个距离才离开，留出缓冲区避免手抖掉组。 */
-const STAY_DISTANCE = 280;
 /** 冻结框判定容差：中心点贴在框上不算出去。 */
 const EDGE_TOLERANCE = 6;
 
@@ -69,15 +59,20 @@ function rectOf<TNode extends MembershipNode>(
   };
 }
 
-function centerOf(rect: Rect) {
-  return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
+/** 读取组自己存的 frame；旧数据缺失/非法时返回 null，由调用方补算。 */
+function readGroupFrame(group: MembershipGroup): Rect | null {
+  const frame = (group as { frame?: Record<string, unknown> }).frame;
+  if (!frame) return null;
+  const x = Number(frame.x),
+    y = Number(frame.y),
+    width = Number(frame.width),
+    height = Number(frame.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return { left: x, top: y, right: x + width, bottom: y + height };
 }
 
-/** 两个矩形的最近距离；相交或相邻时为 0。 */
-function rectDistance(a: Rect, b: Rect): number {
-  const dx = Math.max(0, a.left - b.right, b.left - a.right),
-    dy = Math.max(0, a.top - b.bottom, b.top - a.bottom);
-  return Math.hypot(dx, dy);
+function centerOf(rect: Rect) {
+  return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
 }
 
 /**
@@ -90,46 +85,28 @@ export function syncCanvasGroupMembership<
   nodes: readonly TNode[],
   groups: readonly TGroup[],
   measure: MembershipMeasurer<TNode>,
-  frozen?: FrozenGroupFrame | null,
 ): { nodes: TNode[]; groups: TGroup[] } | null {
   if (!groups.length) return null;
   const groupIds = new Set(groups.map((group) => group.id));
 
   const rects = new Map<string, Rect>();
   const membersByGroup = new Map<string, TNode[]>();
-  const boxesByGroup = new Map<string, Rect>();
   for (const node of nodes) {
     rects.set(node.id, rectOf(node, measure));
-    if (!node.groupId || !groupIds.has(node.groupId)) continue;
-    const list = membersByGroup.get(node.groupId) || [];
+    const groupId = typeof node.groupId === 'string' ? node.groupId : undefined;
+    if (!groupId || !groupIds.has(groupId)) continue;
+    const list = membersByGroup.get(groupId) || [];
     list.push(node);
-    membersByGroup.set(node.groupId, list);
-  }
-  for (const [groupId, members] of membersByGroup) {
-    let left = Infinity,
-      top = Infinity,
-      right = -Infinity,
-      bottom = -Infinity;
-    for (const member of members) {
-      const rect = rects.get(member.id);
-      if (!rect) continue;
-      left = Math.min(left, rect.left);
-      top = Math.min(top, rect.top);
-      right = Math.max(right, rect.right);
-      bottom = Math.max(bottom, rect.bottom);
-    }
-    if ([left, top, right, bottom].every(Number.isFinite))
-      boxesByGroup.set(groupId, { left, top, right, bottom });
+    membersByGroup.set(groupId, list);
   }
 
-  /** 某组的包围盒；excludeId 用于排除"正在被判定的这个节点自己"。 */
-  const boxOfGroup = (groupId: string, excludeId?: string): Rect | null => {
+  /** 旧组数据没有 frame 时，按成员包围盒补一份并写回，之后就一直用它。 */
+  const boxOfMembers = (groupId: string): Rect | null => {
     let left = Infinity,
       top = Infinity,
       right = -Infinity,
       bottom = -Infinity;
     for (const member of membersByGroup.get(groupId) || []) {
-      if (member.id === excludeId) continue;
       const rect = rects.get(member.id);
       if (!rect) continue;
       left = Math.min(left, rect.left);
@@ -138,69 +115,80 @@ export function syncCanvasGroupMembership<
       bottom = Math.max(bottom, rect.bottom);
     }
     if (![left, top, right, bottom].every(Number.isFinite)) return null;
-    return { left, top, right, bottom };
+    return {
+      left: left - GROUP_FRAME_PADDING,
+      top: top - GROUP_FRAME_PADDING,
+      right: right + GROUP_FRAME_PADDING,
+      bottom: bottom + GROUP_FRAME_PADDING,
+    };
   };
 
-  const distanceToGroup = (node: TNode, groupId: string) => {
-    const rect = rects.get(node.id);
-    if (!rect) return Infinity;
-    let nearest = Infinity;
-    for (const member of membersByGroup.get(groupId) || []) {
-      if (member.id === node.id) continue;
-      const other = rects.get(member.id);
-      if (!other) continue;
-      nearest = Math.min(nearest, rectDistance(rect, other));
+  const frames = new Map<string, Rect>();
+  let framesPatched = false;
+  const resolvedGroups = groups.map((group) => {
+    const stored = readGroupFrame(group);
+    if (stored) {
+      frames.set(group.id, stored);
+      return group;
     }
-    return nearest;
-  };
+    const box = boxOfMembers(group.id);
+    if (!box) return group;
+    frames.set(group.id, box);
+    framesPatched = true;
+    return {
+      ...group,
+      frame: {
+        x: box.left,
+        y: box.top,
+        width: box.right - box.left,
+        height: box.bottom - box.top,
+      },
+    } as TGroup;
+  });
 
+  // 成员去留只看"组框"：节点中心在框内就留，出框就走。
+  // 组框是独立存的一份，不会随成员移动而变大，所以拖着成员往外走时能真正出组。
   const nextGroupId = new Map<string, string | undefined>();
   for (const node of nodes) {
-    const currentGroupId = node.groupId && groupIds.has(node.groupId) ? node.groupId : undefined;
+    const currentGroupId =
+      typeof node.groupId === 'string' && groupIds.has(node.groupId) ? node.groupId : undefined;
     if (!currentGroupId) continue;
-    const rect = rects.get(node.id);
-    if (!rect) {
+    const rect = rects.get(node.id),
+      frame = frames.get(currentGroupId);
+    if (!rect || !frame) {
       nextGroupId.set(node.id, currentGroupId);
       continue;
     }
-    if (frozen && frozen.groupId === currentGroupId) {
-      // 主判据：中心点还在"拖动前那个框"里就算还在组内。
-      const { x, y } = centerOf(rect);
-      const inside =
-        x >= frozen.left - EDGE_TOLERANCE &&
-        x <= frozen.right + EDGE_TOLERANCE &&
-        y >= frozen.top - EDGE_TOLERANCE &&
-        y <= frozen.bottom + EDGE_TOLERANCE;
-      nextGroupId.set(node.id, inside ? currentGroupId : undefined);
-      continue;
-    }
-    const distance = distanceToGroup(node, currentGroupId);
-    // 只有一个成员的组没有"其他成员"，交给解散逻辑处理，这里先留住。
-    nextGroupId.set(node.id, distance <= STAY_DISTANCE ? currentGroupId : undefined);
+    const { x, y } = centerOf(rect);
+    const inside =
+      x >= frame.left - EDGE_TOLERANCE &&
+      x <= frame.right + EDGE_TOLERANCE &&
+      y >= frame.top - EDGE_TOLERANCE &&
+      y <= frame.bottom + EDGE_TOLERANCE;
+    nextGroupId.set(node.id, inside ? currentGroupId : undefined);
   }
 
-  // 已经离开（或本来就不在组里）的节点，看看有没有落进别的组。
+  // 没有归属的节点，看看中心点落进了哪个组框（多个重叠时取面积最小的）。
   for (const node of nodes) {
     if (nextGroupId.get(node.id)) continue;
     const rect = rects.get(node.id);
     if (!rect) continue;
     const point = centerOf(rect);
-    let picked: { id: string; distance: number } | null = null;
-    for (const groupId of membersByGroup.keys()) {
-      // 刚从这个组离开的节点，同一次手势里不再放回去（否则会原地打转、永远拖不出去）。
-      if (groupId === node.groupId) continue;
-      // 关键：算包围盒要排除节点自己，否则它自己撑大的框会把它重新吸回去。
-      const box = boxOfGroup(groupId, node.id) ?? boxesByGroup.get(groupId);
-      const inside = !!(
-        box &&
-        point.x >= box.left &&
-        point.x <= box.right &&
-        point.y >= box.top &&
-        point.y <= box.bottom
-      );
-      const distance = distanceToGroup(node, groupId);
-      if (!inside && distance > JOIN_DISTANCE) continue;
-      if (!picked || distance < picked.distance) picked = { id: groupId, distance };
+    let picked: { id: string; area: number } | null = null;
+    for (const group of resolvedGroups) {
+      // 刚从这个组离开的节点，同一次手势里不再放回去（否则原地打转、永远拖不出去）。
+      if (group.id === node.groupId) continue;
+      const frame = frames.get(group.id);
+      if (!frame) continue;
+      if (
+        point.x < frame.left ||
+        point.x > frame.right ||
+        point.y < frame.top ||
+        point.y > frame.bottom
+      )
+        continue;
+      const area = (frame.right - frame.left) * (frame.bottom - frame.top);
+      if (!picked || area < picked.area) picked = { id: group.id, area };
     }
     if (picked) nextGroupId.set(node.id, picked.id);
   }
@@ -212,7 +200,8 @@ export function syncCanvasGroupMembership<
       break;
     }
   }
-  if (!changed) return null;
+  // 新补的组框也要写回，否则旧组永远停在"按成员算框"的状态。
+  if (!changed && !framesPatched) return null;
 
   const nodesWithGroup = nodes.map((node) => {
     const target = nextGroupId.get(node.id);
@@ -227,7 +216,7 @@ export function syncCanvasGroupMembership<
 
   const groupsNext: TGroup[] = [];
   let groupsChanged = false;
-  for (const group of groups) {
+  for (const group of resolvedGroups) {
     const memberIds = nodesWithGroup
       .filter((node) => node.groupId === group.id)
       .map((node) => node.id);
@@ -257,7 +246,7 @@ export function syncCanvasGroupMembership<
           return stripped;
         })
       : nodesWithGroup,
-    groups: groupsChanged ? groupsNext : (groups as TGroup[]),
+    groups: groupsChanged || framesPatched ? (groupsChanged ? groupsNext : resolvedGroups) : resolvedGroups,
   };
 }
 
@@ -408,4 +397,50 @@ export function connectJoinedGroupLinks<TNode extends GroupLinkNode>(
     }
   }
   return next;
+}
+
+/**
+ * 整组平移时，把组框一起搬走。
+ *
+ * 组框是独立存的一份，成员动了框不会自动跟着走 —— 只有"所有成员位移相同"才说明
+ * 拖的是整个组（或框），这时才平移框；拖单个成员时位移不一致，框保持不动。
+ */
+export function translateGroupFrames<TGroup extends MembershipGroup>(
+  groups: readonly TGroup[],
+  nodes: readonly { id: string; x: number; y: number }[],
+  origins: ReadonlyMap<string, { x: number; y: number }>,
+): TGroup[] {
+  if (!groups.length || !origins.size) return groups as TGroup[];
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  let changed = false;
+  const next = groups.map((group) => {
+    const frame = (group as { frame?: { x: number; y: number; width: number; height: number } })
+      .frame;
+    if (!frame) return group;
+    let dx: number | null = null,
+      dy: number | null = null,
+      moved = true;
+    for (const nodeId of group.nodeIds) {
+      const origin = origins.get(nodeId),
+        node = byId.get(nodeId);
+      if (!origin || !node) {
+        moved = false;
+        break;
+      }
+      const deltaX = node.x - origin.x,
+        deltaY = node.y - origin.y;
+      if (dx === null) {
+        dx = deltaX;
+        dy = deltaY;
+      } else if (Math.abs(deltaX - dx) > 0.5 || Math.abs(deltaY - (dy ?? 0)) > 0.5) {
+        moved = false;
+        break;
+      }
+    }
+    if (!moved || dx === null || dy === null) return group;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return group;
+    changed = true;
+    return { ...group, frame: { ...frame, x: frame.x + dx, y: frame.y + dy } };
+  });
+  return changed ? next : (groups as TGroup[]);
 }
