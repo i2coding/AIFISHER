@@ -1,5 +1,10 @@
 import type { CanvasComponent } from '../app/canvasComponentType';
 import type * as ReactTypes from 'react';
+import {
+  getLogSnapshot,
+  subscribeLogs,
+  toggleTerminal,
+} from '../diagnostics/logBus';
 type Runtime = Pick<
   typeof ReactTypes,
   'createElement' | 'Fragment' | 'useState' | 'useRef' | 'useEffect' | 'useLayoutEffect' | 'useMemo'
@@ -32,6 +37,7 @@ interface Components {
   SaveIcon: CanvasComponent;
   ImportIcon: CanvasComponent;
   BackIcon: CanvasComponent;
+  TerminalIcon: CanvasComponent;
 }
 export function CanvasHeader(React: Runtime, props: Props, components: Components) {
   const {
@@ -51,11 +57,17 @@ export function CanvasHeader(React: Runtime, props: Props, components: Component
     chatPanelWidth = 400,
     documentEpoch,
   } = props;
-  const { Tooltip, SaveIcon, ImportIcon, BackIcon } = components;
+  const { Tooltip, SaveIcon, ImportIcon, BackIcon, TerminalIcon } = components;
   const [menuOpen, setMenuOpen] = React.useState(false),
     menuRoot = React.useRef<HTMLDivElement>(null),
     [saving, setSaving] = React.useState(false),
-    [error, setError] = React.useState('');
+    [error, setError] = React.useState(''),
+    // 终端按钮上的未读角标：面板关闭时累计，打开即清零。
+    [logs, setLogs] = React.useState(() => getLogSnapshot());
+  React.useEffect(() => {
+    setLogs(getLogSnapshot());
+    return subscribeLogs(() => setLogs(getLogSnapshot()));
+  }, []);
   const live = React.useRef(props);
   live.current = props;
   const savingNow = React.useRef(false),
@@ -288,6 +300,44 @@ export function CanvasHeader(React: Runtime, props: Props, components: Component
         </div>
         <div className={'flex items-center gap-2 pointer-events-auto'}>
           <div data-fisherai-account-center-slot={'true'} />
+          <Tooltip
+            text={
+              logs.open
+                ? '关闭终端'
+                : logs.errorUnread > 0
+                  ? `打开终端（${logs.errorUnread} 条新错误）`
+                  : logs.unread > 0
+                    ? `打开终端（${logs.unread} 条新日志）`
+                    : '打开终端'
+            }
+            position="bottom"
+          >
+            <button
+              type="button"
+              aria-label="打开终端"
+              aria-pressed={logs.open}
+              data-fisherai-terminal-toggle={'true'}
+              onClick={() => toggleTerminal()}
+              className={`relative w-8 h-8 flex items-center justify-center rounded-md border transition-colors ${
+                logs.open
+                  ? 'bg-[var(--af-selected)] text-[var(--af-on-selected)] border-[var(--af-border-control)]'
+                  : 'text-[var(--af-text-secondary)] border-[var(--af-border)] hover:text-[var(--af-text)] hover:bg-[var(--af-surface-raised)]'
+              }`}
+            >
+              <TerminalIcon size={15} />
+              {!logs.open && logs.unread > 0 ? (
+                <span
+                  className={`absolute -top-1 -right-1 min-w-[14px] h-[14px] px-[3px] rounded-full text-[9px] leading-[14px] text-center font-semibold ${
+                    logs.errorUnread > 0
+                      ? 'bg-[var(--af-danger)] text-[var(--af-input)]'
+                      : 'bg-[var(--af-info)] text-[var(--af-input)]'
+                  }`}
+                >
+                  {logs.errorUnread > 0 ? logs.errorUnread : logs.unread}
+                </span>
+              ) : null}
+            </button>
+          </Tooltip>
           <div
             className={
               'text-[10px] font-medium px-2 py-1 rounded-md border text-[var(--af-text-muted)] border-[var(--af-border)]'

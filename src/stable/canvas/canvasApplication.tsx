@@ -85,6 +85,7 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
     Controls,
     SidePanels,
     Overlays,
+    Terminal,
     Annotation,
     Crop,
     Resize,
@@ -2190,6 +2191,8 @@ export function CanvasApplication(React: Runtime, dependencies: Dependencies) {
         workflowPresetDefaultName,
         onSaveWorkflowPreset: handleSaveWorkflowPreset,
       }),
+      // 终端面板：开合状态在日志总线里，组件自己订阅，不需要 props。
+      React.createElement(Terminal, { key: 'terminal' }),
       React.createElement(Settings, {
         key: 'settings',
         isOpen: settingsOpen,

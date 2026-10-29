@@ -92,6 +92,7 @@ export { CanvasMiniMaxNode } from '../nodes/canvasMiniMaxNode';
 export { CanvasMediaToolbar } from '../nodes/canvasMediaToolbar';
 
 export { CanvasHeader } from './canvasHeader';
+export { CanvasTerminal } from './canvasTerminal';
 export { ProjectDashboard } from '../navigation/projectDashboard';
 export { ProjectDashboardHeader } from '../navigation/projectDashboardHeader';
 export { DashboardProjectCard, DashboardFolderCard } from '../navigation/projectDashboardCards';

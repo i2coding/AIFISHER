@@ -106,6 +106,47 @@ export function createDiagnosticsRouter(options = {}) {
     res.json(await buildDiagnosticsHealth(options));
   });
 
+  /**
+   * 终端面板的数据源。
+   * 优先返回内存环里的实时日志（带级别、按写入顺序），它为空时（刚重启、还没写过日志）
+   * 再退回日志文件尾部 —— 这样面板既能看"刚才那条报错"，也能看上次会话的尾巴。
+   * 内存环的内容在写入前就已脱敏（见 createSecureLogger 的 onLog），这里不再二次处理。
+   */
+  router.get('/api/diagnostics/logs', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const requested = Number(req.query?.tail);
+    const tail = Number.isFinite(requested)
+      ? Math.min(Math.max(Math.trunc(requested), 20), 1000)
+      : 300;
+
+    let live = [];
+    try {
+      live = options.readLiveLogs?.() || [];
+    } catch {
+      live = [];
+    }
+    if (Array.isArray(live) && live.length > 0) {
+      const entries = live.slice(-tail);
+      res.json({
+        ok: true,
+        source: 'live',
+        generatedAt: new Date().toISOString(),
+        entries,
+        lines: entries.map((entry) => String(entry?.message ?? '')),
+      });
+      return;
+    }
+
+    const lines = await runCheck(async () => (await options.readRecentLogs?.(tail)) || [], []);
+    res.json({
+      ok: true,
+      source: 'file',
+      generatedAt: new Date().toISOString(),
+      entries: [],
+      lines: Array.isArray(lines) ? lines.slice(-tail) : [],
+    });
+  });
+
   router.get('/api/diagnostics/export', async (_req, res) => {
     const health = await buildDiagnosticsHealth(options);
     const recentLogs = await runCheck(

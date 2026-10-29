@@ -159,6 +159,7 @@ const dependencies: Dependencies = {
   Projects: view(Components.ProjectDashboard),
   Settings: view(Components.Settings),
   Header: view(Components.Header),
+  Terminal: view(Components.Terminal),
   Sidebar: view(Components.Sidebar),
   Scene: view(Components.Scene),
   Controls: view(Components.ViewportControls),

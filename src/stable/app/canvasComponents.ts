@@ -58,6 +58,18 @@ export const Header = bind(Dialogs.CanvasHeader)(() => [
     SaveIcon: Icons.Save,
     ImportIcon: Icons.FolderOpen,
     BackIcon: Icons.LogOut,
+    TerminalIcon: Icons.SquareTerminal,
+  },
+]);
+export const Terminal = bind(Dialogs.CanvasTerminal)(() => [
+  {
+    TerminalIcon: Icons.SquareTerminal,
+    CloseIcon: Icons.X,
+    TrashIcon: Icons.Trash2,
+    CopyIcon: Icons.Copy,
+    DownloadIcon: Icons.Download,
+    SearchIcon: Icons.Search,
+    RefreshIcon: Icons.RefreshCw,
   },
 ]);
 export const Sidebar = bind(Dialogs.CanvasSidebar)(() => [

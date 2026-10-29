@@ -23,6 +23,7 @@ import {
   type GenerationModels,
 } from './canvasGenerationRequests';
 import { inspectImage, inspectVideo } from '../media/generationMediaMetadata';
+import { logBus } from '../diagnostics/logBus';
 
 export { generateAudio, generateText, getGenerationConcurrency } from './generationClient';
 export { inspectImage, extractVideoLastFrame } from '../media/generationMediaMetadata';
@@ -175,8 +176,10 @@ export function createCanvasGeneration(
       const publish = (patch: Partial<CanvasNode>) => {
         if (owns()) binding.updateNode(id, patch);
       };
+      // 提升到 try 之外：失败分支要用它标出是哪个模型出的问题。
+      let modelName = '';
       try {
-        const modelName = text(node[`${node.type.toLowerCase()}Model`]);
+        modelName = text(node[`${node.type.toLowerCase()}Model`]);
         const catalog =
           node.type === 'Image'
             ? models.imageModels
@@ -303,6 +306,12 @@ export function createCanvasGeneration(
           generationDurationMs: runtime.now() - startedAt,
           generationDiagnosticCode: undefined,
         });
+        logBus.success(
+          `${node.type === 'Text' ? '文本' : node.type === 'Image' ? '图片' : node.type === 'Video' ? '视频' : '音频'}生成完成${
+            modelName ? `（${modelName}）` : ''
+          } · ${Math.max(0, Math.round((runtime.now() - startedAt) / 1000))}s`,
+          '生成',
+        );
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error));
         const code =
@@ -312,6 +321,13 @@ export function createCanvasGeneration(
         const message = /permission_denied|\b403\b/i.test(failure.message)
           ? '权限被拒绝。请检查 API Key 配置。'
           : failure.message || '生成任务失败';
+        // 面板上只显示一句人话，这里保留原始错误与错误码，方便定位到是网关还是模型侧。
+        logBus.error(
+          `${node.type} 生成失败${modelName ? `（${modelName}）` : ''}：${failure.message || '未知错误'}${
+            code ? ` [${code}]` : ''
+          }`,
+          '生成',
+        );
         publish({
           status: 'error',
           errorMessage: message,

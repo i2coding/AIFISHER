@@ -22,11 +22,23 @@ function requestContext(request, requestId) {
   };
 }
 
-export function createSecureLogger({ sink = console } = {}) {
+export function createSecureLogger({ sink = console, onLog = null } = {}) {
   const write = (method, args) => {
     const context = getRequestContext();
     const values = context ? [{ request: context }, ...args] : args;
-    sink[method](...values.map((value) => redactSensitive(value)));
+    const redacted = values.map((value) => redactSensitive(value));
+    sink[method](...redacted);
+    // 终端面板的内存缓冲：传原始值而不是 redacted —— 面板是"本机用户自己看日志"，
+    // 需要用 redactSecretsOnly（去掉 Key/令牌，但**保留路径**）才能真正帮上排错；
+    // 而 redacted 已经把所有绝对路径换成了 [PATH]，恢复不回来。
+    // sink（stdout/文件/诊断包）那条路仍然走完整脱敏，两者互不影响。
+    if (onLog) {
+      try {
+        onLog(method, values);
+      } catch {
+        /* 采集失败绝不能影响正常日志输出。 */
+      }
+    }
   };
   return {
     log: (...args) => write('log', args),
@@ -56,14 +68,14 @@ export function createRequestContextMiddleware({
   };
 }
 
-export function installSecureConsole(target = console) {
+export function installSecureConsole(target = console, options = {}) {
   if (target[CONSOLE_MARK]) return target;
   const originals = {
     log: target.log.bind(target),
     warn: target.warn.bind(target),
     error: target.error.bind(target),
   };
-  const secure = createSecureLogger({ sink: originals });
+  const secure = createSecureLogger({ sink: originals, onLog: options.onLog });
   target.log = secure.log;
   target.warn = secure.warn;
   target.error = secure.error;

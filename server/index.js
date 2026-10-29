@@ -86,6 +86,7 @@ import { createRelayAccountRouter } from './account/relayAccountRouter.js';
 import { RelayAccountService } from './account/relayAccountService.js';
 import { RelayAccountStore } from './account/relayAccountStore.js';
 import { createDiagnosticsRouter } from './diagnostics/diagnosticsRouter.js';
+import { createLogRingBuffer } from './diagnostics/logRing.js';
 import { createThumbnailCache, ThumbnailCacheError } from './media/thumbnailCache.js';
 import { createMediaAssetRouter } from './media/mediaAssetRouter.js';
 import { createCanvasUpscaleWebAppRouter } from './media/canvasUpscaleWebAppRouter.js';
@@ -103,7 +104,13 @@ import {
 
 export { getWorkspacePaths, getUrlPrefix } from './workspace/workspacePaths.js';
 
-installSecureConsole();
+// 终端面板要看的"最近日志"：内存环由 console 写入时同步填充（脱敏后），
+// 比读日志文件更实时，也不会把 stdout/stderr 的两份日志混在一起排不出先后。
+const LOG_RING = createLogRingBuffer(400);
+
+installSecureConsole(console, {
+    onLog: (method, values) => LOG_RING.push(method, values)
+});
 
 // Desktop mode listens only on the named pipe given by the Electron main process; there is
 // then no TCP port, no Origin boundary and no port in diagnostics.
@@ -341,7 +348,7 @@ async function readLogTail(filePath, maxBytes = 64 * 1024) {
     }
 }
 
-async function readRecentDiagnosticLogs() {
+async function readRecentDiagnosticLogs(maxLines = 200) {
     const entries = await fs.promises.readdir(LOGS_DIR, { withFileTypes: true });
     const candidates = await Promise.all(entries
         .filter((entry) => entry.isFile() && entry.name.endsWith('.log'))
@@ -356,7 +363,7 @@ async function readRecentDiagnosticLogs() {
     return texts
         .flatMap((text) => text.split(/\r?\n/))
         .filter(Boolean)
-        .slice(-200);
+        .slice(-Math.max(1, Math.trunc(maxLines) || 200));
 }
 
 // Every request that reaches this backend is the active user's: the named pipe is reachable
@@ -445,7 +452,8 @@ app.use(createDiagnosticsRouter({
         return { status: 'ready', writable: true };
     },
     getProviderStatus: getDiagnosticsProviderStatus,
-    readRecentLogs: readRecentDiagnosticLogs
+    readRecentLogs: readRecentDiagnosticLogs,
+    readLiveLogs: () => LOG_RING.list()
 }));
 
 const comfyProcessController = createComfyProcessController({

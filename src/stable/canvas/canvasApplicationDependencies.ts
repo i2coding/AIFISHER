@@ -92,6 +92,7 @@ export interface Dependencies {
   Controls: Component;
   SidePanels: Component;
   Overlays: Component;
+  Terminal: Component;
   Annotation: Component;
   Crop: Component;
   Resize: Component;
